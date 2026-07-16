@@ -20,6 +20,14 @@ def run() -> None:
         ex_style = app._main_window_ex_style()
         assert ex_style & 0x00000080, "pet window is not marked as a tool window"
         assert not ex_style & 0x00040000, "pet window still has the taskbar app-window style"
+        real_monitor = app._monitor_info_at(app.root.winfo_x(), app.root.winfo_y())
+        base_width = app.window_w
+        simulated_monitor = dict(real_monitor)
+        simulated_monitor["dpi"] = 144
+        app._resize_window(keep_position=True, monitor_info=simulated_monitor)
+        assert app.scale == app._effective_scale(app.user_scale, 144), "pet scale did not follow monitor DPI"
+        assert app.window_w > base_width, "pet did not grow on the higher-DPI monitor"
+        app._resize_window(keep_position=True, monitor_info=real_monitor)
         app.state["coins"] = 2000
         bbox = app.last_rendered_alpha.getbbox()
         assert bbox is not None
@@ -47,7 +55,13 @@ def run() -> None:
             assert text_box[1] >= shape_box[1] + 6, "bubble text overlaps the top border"
             assert text_box[3] <= shape_box[3] - 8, "bubble text overlaps the bottom/tail"
 
-        app.root.after(300, lambda: app.open_quick_panel(40, 40))
+        original_tk_scaling = float(app.root.tk.call("tk", "scaling"))
+
+        def open_high_dpi_quick_panel() -> None:
+            app.root.tk.call("tk", "scaling", 2.25)
+            app.open_quick_panel(40, 40)
+
+        app.root.after(300, open_high_dpi_quick_panel)
 
         def verify_quick_panel() -> None:
             panel = app.quick_panel
@@ -57,11 +71,16 @@ def run() -> None:
             assert all(str(int(app.state[key])) in panel_status for key in ("hunger", "mood", "energy")), "quick-panel status is missing a care value"
             status_bottom = app.panel_status.winfo_y() + app.panel_status.winfo_height()
             assert status_bottom <= app.panel_status.master.winfo_height(), "quick-panel status is clipped"
-            footer = panel.winfo_children()[0].winfo_children()[-1]
+            footer = app.quick_panel_footer
             assert footer.winfo_height() >= 28, "quick-panel footer is clipped"
             assert footer.winfo_y() + footer.winfo_height() <= panel.winfo_height(), "quick-panel footer is outside the window"
+            monitor = app._monitor_info_at(panel.winfo_x(), panel.winfo_y())
+            left, top, right, bottom = monitor["work"]
+            assert left <= panel.winfo_x() and panel.winfo_x() + panel.winfo_width() <= right, "quick panel exceeds monitor width"
+            assert top <= panel.winfo_y() and panel.winfo_y() + panel.winfo_height() <= bottom, "quick panel exceeds monitor height"
             button_texts = [widget.cget("text") for widget in footer.winfo_children()]
             assert app.bi("退出程序", "Quit") in button_texts, "quick-panel quit button is missing"
+            app.root.tk.call("tk", "scaling", original_tk_scaling)
 
         app.root.after(150, verify_bubble_layout)
         app.root.after(500, verify_quick_panel)

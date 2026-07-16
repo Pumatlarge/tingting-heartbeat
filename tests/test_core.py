@@ -60,6 +60,26 @@ class CoreTests(unittest.TestCase):
         wrapped = TingtingPet._wrap_bubble_text("这里不可以随便碰啦，请尊重一点。", FakeFont(), 70)
         self.assertGreater(len(wrapped.splitlines()), 1)
         self.assertTrue(all(len(line) <= 7 for line in wrapped.splitlines()))
+        self.assertEqual(TingtingPet._bubble_font_size(0.5), 8)
+        self.assertEqual(TingtingPet._bubble_font_size(0.82), 8)
+        self.assertEqual(TingtingPet._bubble_font_size(1.0), 9)
+        self.assertEqual(TingtingPet._bubble_font_size(1.6), 10)
+
+    def test_multi_monitor_dpi_scale_and_negative_work_area(self) -> None:
+        self.assertEqual(TingtingPet._effective_scale(0.82, 96), 0.82)
+        self.assertEqual(TingtingPet._effective_scale(0.82, 144), 1.23)
+        self.assertEqual(TingtingPet._effective_scale(0.82, 192), 1.64)
+        work_area = (-1920, 0, 0, 1040)
+        x, y = TingtingPet._clamp_to_work_area(-100, 900, 320, 570, work_area, padding=8)
+        self.assertEqual((x, y), (-328, 462))
+        self.assertGreaterEqual(x, work_area[0] + 8)
+        self.assertLessEqual(x + 320, work_area[2] - 8)
+        self.assertGreaterEqual(y, work_area[1] + 8)
+        self.assertLessEqual(y + 570, work_area[3] - 8)
+        self.assertEqual(TingtingPet._geometry_position(-1800, 24), "-1800+24")
+        self.assertEqual(TingtingPet._quick_panel_dimensions(320, 730, work_area), (320, 730))
+        short_work_area = (0, 0, 1280, 650)
+        self.assertEqual(TingtingPet._quick_panel_dimensions(410, 900, short_work_area), (410, 634))
 
     def test_click_light_is_clipped_to_character_alpha(self) -> None:
         image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))

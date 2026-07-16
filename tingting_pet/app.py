@@ -70,7 +70,9 @@ class TingtingPet:
         self.state = load_state()
         self.settings = self.state["settings"]
         self.pending_offline_message = self._apply_offline_progress()
-        self.scale = float(self.settings.get("scale", 0.82))
+        self.user_scale = float(self.settings.get("scale", 0.82))
+        self.monitor_dpi = 96
+        self.scale = self.user_scale
         self.frames = self._load_frames()
         self.current_action = "idle"
         self.action_started = time.monotonic()
@@ -143,7 +145,7 @@ class TingtingPet:
         splash.configure(bg="#f7dfe5")
         width, height = 430, 320
         x, y = self._centered_window_position(width, height)
-        splash.geometry(f"{width}x{height}+{x}+{y}")
+        splash.geometry(f"{width}x{height}{self._geometry_position(x, y)}")
         try:
             splash.attributes("-alpha", 0.0)
         except tk.TclError:
@@ -300,9 +302,60 @@ class TingtingPet:
     def _toolwindow_style(style: int) -> int:
         return (style | 0x00000080) & ~0x00040000
 
-    def _active_monitor_bounds(self) -> tuple[int, int, int, int]:
+    @staticmethod
+    def _geometry_position(x: int, y: int) -> str:
+        return f"{int(x):+d}{int(y):+d}"
+
+    @staticmethod
+    def _effective_scale(user_scale: float, dpi: int) -> float:
+        return round(float(user_scale) * max(96, int(dpi)) / 96.0, 3)
+
+    @staticmethod
+    def _clamp_to_work_area(
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        work_area: tuple[int, int, int, int],
+        padding: int = 8,
+    ) -> tuple[int, int]:
+        left, top, right, bottom = work_area
+        min_x, min_y = left + padding, top + padding
+        max_x = max(min_x, right - width - padding)
+        max_y = max(min_y, bottom - height - padding)
+        return max(min_x, min(int(x), max_x)), max(min_y, min(int(y), max_y))
+
+    @staticmethod
+    def _quick_panel_dimensions(
+        required_width: int,
+        required_height: int,
+        work_area: tuple[int, int, int, int],
+        padding: int = 8,
+    ) -> tuple[int, int]:
+        left, top, right, bottom = work_area
+        available_width = max(1, right - left - padding * 2)
+        available_height = max(1, bottom - top - padding * 2)
+        width = min(max(320, int(required_width)), available_width)
+        height = min(max(570, int(required_height)), available_height)
+        return width, height
+
+    def _cursor_position(self) -> tuple[int, int]:
+        if sys.platform == "win32":
+            class Point(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+            try:
+                point = Point()
+                if ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):
+                    return int(point.x), int(point.y)
+            except Exception:
+                pass
+        return self.root.winfo_pointerxy()
+
+    def _monitor_info_at(self, x: int, y: int) -> dict[str, int | tuple[int, int, int, int]]:
         if sys.platform != "win32":
-            return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+            bounds = (0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+            return {"bounds": bounds, "work": bounds, "dpi": 96}
 
         class Point(ctypes.Structure):
             _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
@@ -315,23 +368,38 @@ class TingtingPet:
 
         try:
             user32 = ctypes.windll.user32
-            point = Point()
-            user32.GetCursorPos(ctypes.byref(point))
             monitor_from_point = user32.MonitorFromPoint
             monitor_from_point.argtypes = [Point, ctypes.c_uint]
             monitor_from_point.restype = ctypes.c_void_p
-            monitor = monitor_from_point(point, 2)
+            monitor = monitor_from_point(Point(int(x), int(y)), 2)
             info = MonitorInfo()
             info.cbSize = ctypes.sizeof(MonitorInfo)
             get_monitor_info = user32.GetMonitorInfoW
             get_monitor_info.argtypes = [ctypes.c_void_p, ctypes.POINTER(MonitorInfo)]
             get_monitor_info.restype = ctypes.c_int
             if monitor and get_monitor_info(monitor, ctypes.byref(info)):
-                bounds = info.rcMonitor
-                return int(bounds.left), int(bounds.top), int(bounds.right), int(bounds.bottom)
+                bounds = (int(info.rcMonitor.left), int(info.rcMonitor.top), int(info.rcMonitor.right), int(info.rcMonitor.bottom))
+                work = (int(info.rcWork.left), int(info.rcWork.top), int(info.rcWork.right), int(info.rcWork.bottom))
+                dpi = 96
+                try:
+                    dpi_x = ctypes.c_uint()
+                    dpi_y = ctypes.c_uint()
+                    get_dpi = ctypes.windll.shcore.GetDpiForMonitor
+                    get_dpi.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_uint), ctypes.POINTER(ctypes.c_uint)]
+                    get_dpi.restype = ctypes.c_long
+                    if get_dpi(monitor, 0, ctypes.byref(dpi_x), ctypes.byref(dpi_y)) == 0:
+                        dpi = max(96, int(dpi_x.value))
+                except Exception:
+                    pass
+                return {"bounds": bounds, "work": work, "dpi": dpi}
         except Exception:
             pass
-        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+        bounds = (0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight())
+        return {"bounds": bounds, "work": bounds, "dpi": 96}
+
+    def _active_monitor_bounds(self) -> tuple[int, int, int, int]:
+        x, y = self._cursor_position()
+        return self._monitor_info_at(x, y)["bounds"]
 
     def _centered_window_position(self, width: int, height: int) -> tuple[int, int]:
         left, top, right, bottom = self._active_monitor_bounds()
@@ -393,7 +461,30 @@ class TingtingPet:
         self.root.lift()
         self.root.after(80, self._hide_from_taskbar)
 
-    def _resize_window(self, keep_position: bool = True) -> None:
+    def _resize_window(
+        self,
+        keep_position: bool = True,
+        monitor_info: dict[str, int | tuple[int, int, int, int]] | None = None,
+    ) -> None:
+        old_width = getattr(self, "window_w", max(120, int(CELL_W * self.scale)))
+        old_height = getattr(self, "window_h", max(208, int(CELL_H * self.scale)))
+        if keep_position:
+            old_x, old_y = self.root.winfo_x(), self.root.winfo_y()
+            anchor_x = old_x + old_width // 2
+            anchor_y = old_y + old_height
+            info = monitor_info or self._monitor_info_at(anchor_x, anchor_y)
+        else:
+            saved = self.state.get("position")
+            if isinstance(saved, list) and len(saved) == 2:
+                old_x, old_y = int(saved[0]), int(saved[1])
+                info = monitor_info or self._monitor_info_at(old_x, old_y)
+            else:
+                cursor_x, cursor_y = self._cursor_position()
+                info = monitor_info or self._monitor_info_at(cursor_x, cursor_y)
+                old_x = old_y = 0
+
+        self.monitor_dpi = int(info["dpi"])
+        self.scale = self._effective_scale(self.user_scale, self.monitor_dpi)
         width = max(120, int(CELL_W * self.scale))
         sprite_h = max(130, int(CELL_H * self.scale))
         bubble_h = max(78, int(86 * min(1.2, self.scale + 0.2)))
@@ -401,16 +492,27 @@ class TingtingPet:
         self.window_w, self.sprite_h, self.bubble_h = width, sprite_h, bubble_h
         self.window_h = sprite_h + bubble_h
         if keep_position:
-            x, y = self.root.winfo_x(), self.root.winfo_y()
+            x = old_x + (old_width - width) // 2
+            y = old_y + old_height - self.window_h
         else:
             saved = self.state.get("position")
             if isinstance(saved, list) and len(saved) == 2:
                 x, y = int(saved[0]), int(saved[1])
             else:
-                screen_w, screen_h = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
-                x, y = screen_w - width - 70, screen_h - self.window_h - 90
-        self.root.geometry(f"{width}x{self.window_h}+{max(0, x)}+{max(0, y)}")
+                left, top, right, bottom = info["work"]
+                x, y = right - width - 70, bottom - self.window_h - 90
+        x, y = self._clamp_to_work_area(x, y, width, self.window_h, info["work"], padding=0)
+        self.root.geometry(f"{width}x{self.window_h}{self._geometry_position(x, y)}")
         self.canvas.configure(width=width, height=self.window_h)
+
+    def _sync_monitor_scale_at(self, x: int, y: int) -> bool:
+        info = self._monitor_info_at(x, y)
+        if int(info["dpi"]) == self.monitor_dpi:
+            return False
+        self._resize_window(keep_position=True, monitor_info=info)
+        if self.last_render_source is not None:
+            self._render_frame(self.last_render_source, self.last_render_effect, time.monotonic() - self.action_started)
+        return True
 
     def _set_bubble_height(self, height: int) -> None:
         """Resize only the speech area while keeping婷婷's feet in place."""
@@ -421,8 +523,9 @@ class TingtingPet:
         x = self.root.winfo_x()
         self.bubble_h = height
         self.window_h = self.sprite_h + height
-        y = max(0, old_bottom - self.window_h)
-        self.root.geometry(f"{self.window_w}x{self.window_h}+{max(0, x)}+{y}")
+        info = self._monitor_info_at(x + self.window_w // 2, old_bottom)
+        y = max(info["work"][1], old_bottom - self.window_h)
+        self.root.geometry(f"{self.window_w}x{self.window_h}{self._geometry_position(x, y)}")
         self.canvas.configure(width=self.window_w, height=self.window_h)
 
     @staticmethod
@@ -440,6 +543,10 @@ class TingtingPet:
             lines.append(current)
         return "\n".join(lines)
 
+    @staticmethod
+    def _bubble_font_size(scale: float) -> int:
+        return max(8, min(10, int(8 * float(scale) + 1)))
+
     def _build_context_menu(self) -> None:
         self.quick_panel = None
 
@@ -451,20 +558,17 @@ class TingtingPet:
             self.quick_panel.destroy()
         panel = Toplevel(self.root)
         self.quick_panel = panel
+        panel.withdraw()
         panel.overrideredirect(True)
         panel.attributes("-topmost", True)
         panel.configure(bg="#4d1f2e")
-        width, height = 320, 570
-        x = x if x is not None else self.root.winfo_x() - width
-        y = y if y is not None else self.root.winfo_y()
-        screen_w, screen_h = panel.winfo_screenwidth(), panel.winfo_screenheight()
-        x, y = max(8, min(x, screen_w - width - 8)), max(8, min(y, screen_h - height - 48))
-        panel.geometry(f"{width}x{height}+{x}+{y}")
+        probe_x = x if x is not None else self.root.winfo_x()
+        probe_y = y if y is not None else self.root.winfo_y()
+        monitor = self._monitor_info_at(probe_x, probe_y)
         shell = tk.Frame(panel, bg="#fffaf7", highlightbackground="#9b3e55", highlightthickness=2)
         shell.pack(fill=BOTH, expand=True, padx=2, pady=2)
-        header = tk.Frame(shell, bg="#6f2c42", height=94)
+        header = tk.Frame(shell, bg="#6f2c42")
         header.pack(fill="x")
-        header.pack_propagate(False)
         tk.Label(header, text=self.t("婷婷"), font=("Microsoft YaHei UI", 20, "bold"), fg="white", bg="#6f2c42").pack(anchor="w", padx=18, pady=(11, 0))
         self.panel_status = tk.Label(
             header,
@@ -473,6 +577,11 @@ class TingtingPet:
         )
         self.panel_status.pack(anchor="w", padx=18, pady=(4, 12))
         grid = tk.Frame(shell, bg="#fffaf7")
+        footer = tk.Frame(shell, bg="#fffaf7")
+        footer.pack(side="bottom", fill="x", padx=12, pady=(0, 12))
+        self.quick_panel_footer = footer
+        tk.Button(footer, text=self.t("暂时隐藏"), command=lambda: self._panel_command(self.hide_pet), relief="flat", bg="#eee7e9", cursor="hand2").pack(side=LEFT, fill="x", expand=True, padx=(0, 5))
+        tk.Button(footer, text=self.bi("退出程序", "Quit"), command=lambda: self._panel_command(self.quit), relief="flat", bg="#f2d6dc", fg="#8a263e", cursor="hand2").pack(side=RIGHT, fill="x", expand=True, padx=(5, 0))
         grid.pack(fill=BOTH, expand=True, padx=12, pady=12)
         buttons = [
             ("💬", "聊天", self.open_chat), ("🛍", "商店与背包", self.open_store),
@@ -498,10 +607,20 @@ class TingtingPet:
             button.grid(row=index // 2, column=index % 2, padx=5, pady=5, sticky="nsew")
         grid.columnconfigure(0, weight=1)
         grid.columnconfigure(1, weight=1)
-        footer = tk.Frame(shell, bg="#fffaf7")
-        footer.pack(fill="x", padx=12, pady=(0, 12))
-        tk.Button(footer, text=self.t("暂时隐藏"), command=lambda: self._panel_command(self.hide_pet), relief="flat", bg="#eee7e9", cursor="hand2").pack(side=LEFT, fill="x", expand=True, padx=(0, 5))
-        tk.Button(footer, text=self.bi("退出程序", "Quit"), command=lambda: self._panel_command(self.quit), relief="flat", bg="#f2d6dc", fg="#8a263e", cursor="hand2").pack(side=RIGHT, fill="x", expand=True, padx=(5, 0))
+        for row in range(4):
+            grid.rowconfigure(row, weight=1)
+        panel.update_idletasks()
+        width, height = self._quick_panel_dimensions(
+            shell.winfo_reqwidth() + 4,
+            shell.winfo_reqheight() + 4,
+            monitor["work"],
+        )
+        x = x if x is not None else self.root.winfo_x() - width
+        y = y if y is not None else self.root.winfo_y()
+        x, y = self._clamp_to_work_area(x, y, width, height, monitor["work"], padding=8)
+        panel.geometry(f"{width}x{height}{self._geometry_position(x, y)}")
+        panel.deiconify()
+        panel.lift()
         panel.bind("<FocusOut>", lambda _event: panel.after(120, lambda: panel.destroy() if panel.winfo_exists() and panel.focus_get() is None else None))
         panel.focus_force()
 
@@ -571,7 +690,7 @@ class TingtingPet:
         if abs(dx) + abs(dy) > 5:
             self.dragged = True
         new_x, new_y = wx + dx, wy + dy
-        self.root.geometry(f"+{new_x}+{new_y}")
+        self.root.geometry(self._geometry_position(new_x, new_y))
 
     def _on_release(self, event) -> None:
         if self.touch_started:
@@ -580,6 +699,7 @@ class TingtingPet:
         if self.drag_start and self.dragged:
             sx, sy, _, _ = self.drag_start
             self.state["drag_distance"] = int(self.state.get("drag_distance", 0) + math.hypot(event.x_root - sx, event.y_root - sy))
+            self._sync_monitor_scale_at(event.x_root, event.y_root)
             self.state["position"] = [self.root.winfo_x(), self.root.winfo_y()]
             self.save()
             self.check_achievements()
@@ -944,18 +1064,19 @@ class TingtingPet:
 
     def _walk_step(self) -> None:
         x, y = self.root.winfo_x(), self.root.winfo_y()
-        screen_w = self.root.winfo_screenwidth()
+        monitor = self._monitor_info_at(x + self.window_w // 2, y + self.window_h // 2)
+        left, _, right, _ = monitor["work"]
         x += int(self.walk_direction * max(2, 4 * self.scale))
-        if x <= 0:
-            x, self.walk_direction = 0, 1
-        elif x + self.window_w >= screen_w:
-            x, self.walk_direction = screen_w - self.window_w, -1
-        self.root.geometry(f"+{x}+{y}")
+        if x <= left:
+            x, self.walk_direction = left, 1
+        elif x + self.window_w >= right:
+            x, self.walk_direction = right - self.window_w, -1
+        self.root.geometry(self._geometry_position(x, y))
         self.state["drag_distance"] = int(self.state.get("drag_distance", 0)) + 3
 
     def say(self, text: str, duration_ms: int = 5200) -> None:
         self.canvas.delete("bubble")
-        font_size = max(8, min(12, int(10 * self.scale + 2)))
+        font_size = self._bubble_font_size(self.scale)
         font = tkfont.Font(family="Microsoft YaHei UI", size=font_size)
         inner_width = max(72, self.window_w - 40)
         wrapped = self._wrap_bubble_text(text, font, inner_width)
@@ -1308,17 +1429,18 @@ class TingtingPet:
         frame.pack(fill=BOTH, expand=True)
         ttk.Label(frame, text=self.t("显示与启动"), font=("Microsoft YaHei UI", 15, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
         ttk.Label(frame, text=self.t("人物大小")).grid(row=1, column=0, sticky="w", pady=6)
-        scale_var = DoubleVar(value=self.scale)
+        scale_var = DoubleVar(value=self.user_scale)
         scale_row = ttk.Frame(frame)
         scale_row.grid(row=1, column=1, sticky="ew", pady=6)
         scale_row.columnconfigure(0, weight=1)
-        scale_label = ttk.Label(scale_row, text=f"{int(self.scale * 100)}%", width=6)
+        scale_label = ttk.Label(scale_row, text=f"{int(self.user_scale * 100)}%", width=6)
         scale_label.grid(row=0, column=1, padx=(8, 0))
 
         def preview_scale(value: str) -> None:
-            self.scale = round(float(value), 2)
-            self.settings["scale"] = self.scale
-            scale_label.configure(text=f"{int(self.scale * 100)}%")
+            self.user_scale = round(float(value), 2)
+            self.settings["scale"] = self.user_scale
+            self.scale = self._effective_scale(self.user_scale, self.monitor_dpi)
+            scale_label.configure(text=f"{int(self.user_scale * 100)}%")
             self._resize_window()
             spec = LOGICAL_ACTIONS.get(self.current_action, LOGICAL_ACTIONS["idle"])
             row = str(spec["row"])
@@ -1351,8 +1473,9 @@ class TingtingPet:
 
         def save_settings() -> None:
             old_language = self.language
-            self.scale = round(float(scale_var.get()), 2)
-            self.settings["scale"] = self.scale
+            self.user_scale = round(float(scale_var.get()), 2)
+            self.settings["scale"] = self.user_scale
+            self.scale = self._effective_scale(self.user_scale, self.monitor_dpi)
             self.settings["always_on_top"] = bool(top_var.get())
             self.settings["start_with_windows"] = bool(startup_var.get())
             self.settings["api_base"] = api_base.get().strip() or "https://api.openai.com/v1"
@@ -1402,7 +1525,8 @@ class TingtingPet:
             pass
         self.state = default_state()
         self.settings = self.state["settings"]
-        self.scale = float(self.settings["scale"])
+        self.user_scale = float(self.settings["scale"])
+        self.scale = self._effective_scale(self.user_scale, self.monitor_dpi)
         self.chat_history.clear()
         self._resize_window()
         self.save()
