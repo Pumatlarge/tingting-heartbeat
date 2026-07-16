@@ -29,6 +29,33 @@
 - 支持实时调整人物大小，并提供流畅的粉金点击光效。
 - 使用安装版覆盖升级时会保留原有游戏数据。
 
+## 实际演示
+
+<p align="center">
+  <img src="docs/media/tingting-demo.gif" width="420" alt="婷婷人物动画演示">
+  <br>
+  <sub>程序内实际人物帧：动作演示与粉金点击光效。</sub>
+</p>
+
+<table>
+  <tr>
+    <td align="center" width="34%">
+      <img src="docs/media/feature-center.png" width="280" alt="婷婷功能中心">
+      <br><sub>右键功能中心</sub>
+    </td>
+    <td align="center" width="66%">
+      <img src="docs/media/shop-and-inventory.png" width="620" alt="婷婷商店与背包">
+      <br><sub>商店、背包、食物、礼物与恢复品</sub>
+    </td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/media/chat.png" width="700" alt="和婷婷聊天界面">
+  <br>
+  <sub>支持本地陪伴回复，也可以配置 OpenAI 兼容接口。</sub>
+</p>
+
 ## 下载安装
 
 请前往本仓库的 **Releases** 页面下载最新 Windows 安装版或便携版。

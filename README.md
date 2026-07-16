@@ -29,6 +29,26 @@
 - Adjustable character size and a smooth pink-and-gold click-light effect.
 - Installer upgrades preserve local game data.
 
+## Preview
+
+<p align="center">
+  <img src="docs/media/tingting-demo.gif" width="420" alt="Tingting character animation demo">
+  <br>
+  <sub>Real in-app frames: character actions and the pink-and-gold click-light effect.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/media/shop-and-inventory-en.png" width="760" alt="Tingting shop and inventory">
+  <br>
+  <sub>Shop, inventory, food, gifts, and recovery items.</sub>
+</p>
+
+<p align="center">
+  <img src="docs/media/chat-en.png" width="700" alt="Tingting chat window">
+  <br>
+  <sub>Local companion chat with optional OpenAI-compatible AI configuration.</sub>
+</p>
+
 ## Download
 
 Download the latest Windows installer or portable executable from the repository's **Releases** page.
