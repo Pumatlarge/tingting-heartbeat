@@ -14,6 +14,8 @@
   <a href="#开源协议">开源协议</a>
 </p>
 
+下载链接: https://pan.baidu.com/s/1EKhXNDwNXucy-r-BCxfDWw 提取码: 6688
+
 ## 主要功能
 
 - 透明置顶桌面人物，可在桌面自由拖动。
