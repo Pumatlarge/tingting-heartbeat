@@ -112,15 +112,40 @@ def run() -> None:
         app.root.after(4800, app.open_chat)
 
         def chat() -> None:
+            window = app.dialogs["chat"]
+            window.update()
+            assert not hasattr(app, "chat_session_list") or not app.chat_session_list.winfo_exists(), "legacy chat sidebar is still visible"
+            assert app.chat_new_button.winfo_rooty() < app.chat_text.winfo_rooty(), "new-chat button is not in the header"
+            assert app.chat_history_button.winfo_rooty() < app.chat_text.winfo_rooty(), "history button is not in the header"
+            assert app.chat_input.winfo_rooty() + app.chat_input.winfo_height() <= window.winfo_rooty() + window.winfo_height(), "chat input is outside the window"
             app.chat_input.insert(0, "今天一起加油")
             app.send_chat()
 
         app.root.after(5200, chat)
-        app.root.after(5700, app.open_statistics)
-        app.root.after(6100, app.open_achievements)
-        app.root.after(6500, app.open_help)
-        app.root.after(6900, app.open_settings)
-        app.root.after(7800, app.quit)
+
+        def verify_chat_waiting_state() -> None:
+            assert app.chat_busy, "chat did not enter its single-request waiting state"
+            assert app.chat_input.cget("state") == "disabled", "chat input stayed enabled during a request"
+            assert app.chat_send.cget("state") == "disabled", "chat send button stayed enabled during a request"
+            assert "s" in app.chat_send.cget("text"), "chat send button does not show elapsed time"
+
+        app.root.after(5350, verify_chat_waiting_state)
+
+        def verify_chat_features() -> None:
+            assert not app.chat_busy, "chat request did not finish"
+            assert app.state["chat_sessions"], "chat sessions were not persisted"
+            assert len(app.state["chat_sessions"][0]["messages"]) == 2, "chat messages were not saved"
+            assert app.chat_input.cget("state") == "normal", "chat input was not re-enabled"
+            app._select_all_chat_text()
+            app._copy_chat_selection()
+            assert "今天一起加油" in app.root.clipboard_get(), "chat text could not be copied"
+
+        app.root.after(5750, verify_chat_features)
+        app.root.after(6000, app.open_statistics)
+        app.root.after(6400, app.open_achievements)
+        app.root.after(6800, app.open_help)
+        app.root.after(7200, app.open_settings)
+        app.root.after(8200, app.quit)
         app.run()
         print("GUI_SMOKE_OK")
 
