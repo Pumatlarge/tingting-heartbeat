@@ -24,9 +24,10 @@ Download: https://pan.baidu.com/s/1EKhXNDwNXucy-r-BCxfDWw KEY: 6688
 - Natural idle sleep after five minutes without interaction.
 - Feeding system with 20 dishes, including water spinach, poached shrimp, and beef.
 - Gifts, recovery items, coins, offline rewards, inventory, mood, hunger, and energy.
-- 37 achievements with claimable coin rewards.
+- 50 local achievements, including long-term companionship, streak, and advanced interaction goals, with claimable coin rewards.
 - Companion-time, idle-time, touch, chat, feeding, gift, coin, and preference statistics.
-- Optional OpenAI-compatible AI chat configured from the settings screen.
+- Locally saved AI conversations with new-chat, history, selectable copy, elapsed waiting status, and single-request sending.
+- Optional OpenAI-compatible AI chat and Responses API web search configured from the settings screen.
 - Simplified Chinese and English interfaces.
 - Adjustable character size and a smooth pink-and-gold click-light effect.
 - Installer upgrades preserve local game data.
@@ -73,7 +74,9 @@ Installing a newer version or using the standard uninstaller does not delete thi
 
 ## AI chat
 
-Open **Settings** and enter an API base URL, model name, and API key. The application accepts OpenAI-compatible endpoints.
+Open **Settings** and enter an API base URL, model name, and API key. The application accepts OpenAI-compatible endpoints and can optionally enable Responses API web search when supported by the model and endpoint.
+
+Conversations are saved locally. Use the top-right controls to create a new conversation or switch history. Chat text is selectable and copyable; while a reply is running, the window shows elapsed waiting time and locks the composer to prevent duplicate requests.
 
 The API key is never bundled into shared builds. On Windows it is stored locally using DPAPI encryption tied to the current user account. Without an API key, the chat window still offers a small set of offline responses.
 

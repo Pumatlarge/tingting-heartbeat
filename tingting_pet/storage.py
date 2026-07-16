@@ -24,7 +24,7 @@ def app_dir() -> Path:
 
 def default_state() -> dict:
     return {
-        "version": 1,
+        "version": 2,
         "launch_count": 0,
         "companion_seconds": 0,
         "clicks": 0,
@@ -60,6 +60,8 @@ def default_state() -> dict:
         "last_open_date": "",
         "streak_days": 0,
         "position": None,
+        "chat_sessions": [],
+        "active_chat_id": None,
         "settings": {
             "language": "zh-CN",
             "scale": 0.82,
@@ -68,6 +70,7 @@ def default_state() -> dict:
             "api_base": "https://api.openai.com/v1",
             "api_model": "gpt-4.1-mini",
             "api_key_protected": "",
+            "web_search_enabled": False,
         },
     }
 

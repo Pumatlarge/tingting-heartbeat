@@ -5,11 +5,14 @@ import json
 import math
 import os
 import random
+import re
 import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
+import webbrowser
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
@@ -99,6 +102,13 @@ class TingtingPet:
         self.sprite_item = None
         self.bubble_after = None
         self.chat_history: list[dict[str, str]] = []
+        self.chat_busy = False
+        self.chat_request_started = 0.0
+        self.chat_request_session_id: str | None = None
+        self.chat_request_token = 0
+        self.chat_status_after = None
+        self.chat_session_ids: list[str] = []
+        self._normalize_chat_sessions()
         self.dialogs: dict[str, Toplevel] = {}
         self.dialog_opened_at: dict[str, float] = {}
         self.tray_icon = None
@@ -238,8 +248,14 @@ class TingtingPet:
             self.state["hunger"] = max(0, float(self.state.get("hunger", 70)) - offline_hours * 4)
             self.state["energy"] = max(0, float(self.state.get("energy", 70)) - offline_hours * 2)
         since_gift_hours = max(0, (now - float(self.state.get("last_gift_at", now))) / 3600)
-        if since_gift_hours > 24:
-            self.state["mood"] = max(0, float(self.state.get("mood", 70)) - min(35, (since_gift_hours - 24) * 1.4))
+        if offline_hours:
+            baseline_decay = offline_hours * 1.2
+            neglected_hours = min(offline_hours, max(0, since_gift_hours - 6))
+            neglect_decay = neglected_hours * 1.8
+            self.state["mood"] = max(
+                0,
+                float(self.state.get("mood", 70)) - min(70, baseline_decay + neglect_decay),
+            )
         if now >= float(self.state.get("next_drop_at", now + 1800)):
             if self.state.get("hunger", 50) < 30 or self.state.get("energy", 50) < 30:
                 inventory_key, item = "inventory_recovery", random.choice(RECOVERY_ITEMS)
@@ -834,9 +850,21 @@ class TingtingPet:
     def _frame_interval(action: str) -> float:
         return 1.65 if action == "desk_sleep" else 0.12
 
+    @staticmethod
+    def _sprite_scale_for_effect(effect: str) -> float:
+        return 0.88 if effect == "desk_sleep" else 1.0
+
     def _render_frame(self, source: Image.Image, effect: str, elapsed: float) -> None:
         target_w, target_h = self.window_w, self.sprite_h
         image = self._resize_rgba(source, (target_w, target_h))
+        sleep_scale = self._sprite_scale_for_effect(effect)
+        if sleep_scale < 1.0:
+            sleep_w = max(1, int(target_w * sleep_scale))
+            sleep_h = max(1, int(target_h * sleep_scale))
+            smaller = self._resize_rgba(image, (sleep_w, sleep_h))
+            sleep_canvas = Image.new("RGBA", (target_w, target_h))
+            sleep_canvas.alpha_composite(smaller, ((target_w - sleep_w) // 2, target_h - sleep_h))
+            image = sleep_canvas
         phase = elapsed * 7
         offset_x = offset_y = 0
         if effect == "shake":
@@ -1124,8 +1152,11 @@ class TingtingPet:
         self.state["hunger"] = max(0, float(self.state.get("hunger", 70)) - 0.18 * minutes)
         self.state["energy"] = max(0, float(self.state.get("energy", 70)) - 0.07 * minutes)
         since_gift_hours = max(0, (time.time() - float(self.state.get("last_gift_at", time.time()))) / 3600)
-        if since_gift_hours >= 24:
-            self.state["mood"] = max(0, float(self.state.get("mood", 70)) - 0.16 * minutes)
+        mood_decay_per_minute = self._mood_decay_per_minute(since_gift_hours)
+        self.state["mood"] = max(
+            0,
+            float(self.state.get("mood", 70)) - mood_decay_per_minute * minutes,
+        )
         if self.state["hunger"] < 15:
             self.state["energy"] = max(0, float(self.state["energy"]) - 0.22 * minutes)
             self.state["mood"] = max(0, float(self.state["mood"]) - 0.12 * minutes)
@@ -1139,6 +1170,15 @@ class TingtingPet:
         self.save()
         self.check_achievements()
         self.root.after(10000, self._tick_stats)
+
+    @staticmethod
+    def _mood_decay_per_minute(since_gift_hours: float) -> float:
+        rate = 0.04
+        if since_gift_hours >= 6:
+            rate += 0.10
+        if since_gift_hours >= 24:
+            rate += 0.08
+        return rate
 
     def grant_system_drop(self, silent: bool = False) -> None:
         if self.state.get("hunger", 50) < 30 or self.state.get("energy", 50) < 30:
@@ -1296,10 +1336,174 @@ class TingtingPet:
             for (_kind, name), (variable, inventory_key) in self.store_stock_vars.items():
                 variable.set(self.bi(f"背包数量：{int(self.state.get(inventory_key, {}).get(name, 0))}", f"Owned: {int(self.state.get(inventory_key, {}).get(name, 0))}"))
 
+    @staticmethod
+    def _chat_timestamp(value, fallback: float) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(fallback)
+
+    def _normalize_chat_sessions(self) -> None:
+        now = time.time()
+        normalized = []
+        for raw_session in self.state.get("chat_sessions", []):
+            if not isinstance(raw_session, dict):
+                continue
+            messages = []
+            for raw_message in raw_session.get("messages", []):
+                if not isinstance(raw_message, dict) or raw_message.get("role") not in {"user", "assistant"}:
+                    continue
+                content = str(raw_message.get("content", "")).strip()
+                if content:
+                    messages.append({
+                        "role": raw_message["role"],
+                        "content": content[:12000],
+                        "created_at": self._chat_timestamp(raw_message.get("created_at"), now),
+                    })
+            session_id = str(raw_session.get("id") or uuid.uuid4().hex)
+            created_at = self._chat_timestamp(raw_session.get("created_at"), now)
+            updated_at = self._chat_timestamp(raw_session.get("updated_at"), created_at)
+            title = str(raw_session.get("title", "")).strip() or self.bi("新对话", "New chat")
+            normalized.append({
+                "id": session_id,
+                "title": title[:40],
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "messages": messages[-100:],
+            })
+        normalized.sort(key=lambda item: float(item["updated_at"]), reverse=True)
+        self.state["chat_sessions"] = normalized[:30]
+        valid_ids = {session["id"] for session in normalized}
+        active_id = self.state.get("active_chat_id")
+        if active_id not in valid_ids:
+            active_id = normalized[0]["id"] if normalized else None
+        self.state["active_chat_id"] = active_id
+        active = self._active_chat_session(create=False)
+        self.chat_history = active["messages"] if active else []
+
+    def _active_chat_session(self, create: bool = True) -> dict | None:
+        active_id = self.state.get("active_chat_id")
+        for session in self.state.get("chat_sessions", []):
+            if session.get("id") == active_id:
+                return session
+        return self._new_chat_session(render=False) if create else None
+
+    def _new_chat_session(self, render: bool = True) -> dict:
+        now = time.time()
+        session = {
+            "id": uuid.uuid4().hex,
+            "title": self.bi("新对话", "New chat"),
+            "created_at": now,
+            "updated_at": now,
+            "messages": [],
+        }
+        self.state.setdefault("chat_sessions", []).insert(0, session)
+        self.state["chat_sessions"] = self.state["chat_sessions"][:30]
+        self.state["active_chat_id"] = session["id"]
+        self.chat_history = session["messages"]
+        self.save()
+        if render:
+            self._refresh_chat_session_list()
+            self._render_active_chat()
+            if self._chat_widget_exists("chat_input"):
+                self.chat_input.focus_set()
+        return session
+
+    def _chat_widget_exists(self, name: str) -> bool:
+        widget = getattr(self, name, None)
+        if widget is None:
+            return False
+        try:
+            return bool(widget.winfo_exists())
+        except tk.TclError:
+            return False
+
+    def _refresh_chat_session_list(self) -> None:
+        sessions = self.state.get("chat_sessions", [])
+        self.chat_session_ids = [str(session["id"]) for session in sessions]
+        if not self._chat_widget_exists("chat_session_list"):
+            return
+        self.chat_session_list.configure(state="normal")
+        self.chat_session_list.delete(0, END)
+        active_id = self.state.get("active_chat_id")
+        active_index = None
+        for index, session in enumerate(sessions):
+            timestamp = datetime.fromtimestamp(self._chat_timestamp(session.get("updated_at"), time.time())).strftime("%m-%d %H:%M")
+            self.chat_session_list.insert(END, f"{session['title']}  ·  {timestamp}")
+            if session["id"] == active_id:
+                active_index = index
+        if active_index is not None:
+            self.chat_session_list.selection_set(active_index)
+            self.chat_session_list.see(active_index)
+        if self.chat_busy:
+            self.chat_session_list.configure(state="disabled")
+
+    def _select_chat_session(self, _event=None) -> None:
+        if self.chat_busy or not self._chat_widget_exists("chat_session_list"):
+            return
+        selection = self.chat_session_list.curselection()
+        if not selection:
+            return
+        index = int(selection[0])
+        if index >= len(self.chat_session_ids):
+            return
+        self.state["active_chat_id"] = self.chat_session_ids[index]
+        active = self._active_chat_session(create=False)
+        self.chat_history = active["messages"] if active else []
+        self.save()
+        self._render_active_chat()
+
+    def _select_chat_session_by_id(self, session_id: str) -> None:
+        if self.chat_busy:
+            return
+        if not any(session.get("id") == session_id for session in self.state.get("chat_sessions", [])):
+            return
+        self.state["active_chat_id"] = session_id
+        active = self._active_chat_session(create=False)
+        self.chat_history = active["messages"] if active else []
+        self.save()
+        self._render_active_chat()
+
+    def _show_chat_history_menu(self) -> None:
+        if self.chat_busy or not self._chat_widget_exists("chat_history_button"):
+            return
+        menu = tk.Menu(
+            self.chat_history_button,
+            tearoff=False,
+            font=("Microsoft YaHei UI", 9),
+            bg="#fff8fa",
+            fg="#512b38",
+            activebackground="#ead2da",
+            activeforeground="#512b38",
+        )
+        self.chat_history_menu = menu
+        sessions = self.state.get("chat_sessions", [])
+        if not sessions:
+            menu.add_command(label=self.t("暂无历史对话"), state="disabled")
+        else:
+            active_id = self.state.get("active_chat_id")
+            for session in sessions:
+                timestamp = datetime.fromtimestamp(
+                    self._chat_timestamp(session.get("updated_at"), time.time())
+                ).strftime("%m-%d %H:%M")
+                marker = "✓ " if session.get("id") == active_id else "   "
+                label = f"{marker}{session['title']}  ·  {timestamp}"
+                menu.add_command(
+                    label=label,
+                    command=lambda session_id=str(session["id"]): self._select_chat_session_by_id(session_id),
+                )
+        x = self.chat_history_button.winfo_rootx()
+        y = self.chat_history_button.winfo_rooty() + self.chat_history_button.winfo_height()
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
     def open_chat(self) -> None:
-        window = self._dialog("chat", self.t("和婷婷聊天"), "680x680")
+        window = self._dialog("chat", self.t("和婷婷聊天"), "780x700")
         if window is None:
             return
+        window.protocol("WM_DELETE_WINDOW", lambda: self._close_chat_window(window))
         window.configure(bg="#f4ecef")
         outer = tk.Frame(window, bg="#f4ecef", padx=16, pady=16)
         outer.pack(fill=BOTH, expand=True)
@@ -1308,56 +1512,233 @@ class TingtingPet:
         header = tk.Frame(outer, bg="#6f2c42", height=76)
         header.grid(row=0, column=0, sticky="ew")
         header.pack_propagate(False)
-        tk.Label(header, text=self.t("婷婷"), font=("Microsoft YaHei UI", 18, "bold"), fg="white", bg="#6f2c42").pack(anchor="w", padx=18, pady=(12, 0))
+        header_actions = tk.Frame(header, bg="#6f2c42")
+        header_actions.pack(side=RIGHT, fill="y", padx=12, pady=12)
+        self.chat_history_button = tk.Button(
+            header_actions,
+            text=f"◷ {self.t('历史对话')}",
+            command=self._show_chat_history_menu,
+            relief="flat",
+            bg="#8e3b55",
+            fg="white",
+            disabledforeground="#d9aebb",
+            activebackground="#a94b68",
+            activeforeground="white",
+            cursor="hand2",
+            padx=13,
+            pady=8,
+        )
+        self.chat_history_button.pack(side=RIGHT, fill="y")
+        self.chat_new_button = tk.Button(
+            header_actions,
+            text=f"＋ {self.t('新建对话')}",
+            command=self._new_chat_session,
+            relief="flat",
+            bg="#8e3b55",
+            fg="white",
+            disabledforeground="#d9aebb",
+            activebackground="#a94b68",
+            activeforeground="white",
+            cursor="hand2",
+            padx=13,
+            pady=8,
+        )
+        self.chat_new_button.pack(side=RIGHT, fill="y", padx=(0, 8))
+        header_text = tk.Frame(header, bg="#6f2c42")
+        header_text.pack(side=LEFT, fill=BOTH, expand=True)
+        tk.Label(header_text, text=self.t("婷婷"), font=("Microsoft YaHei UI", 18, "bold"), fg="white", bg="#6f2c42").pack(anchor="w", padx=18, pady=(12, 0))
         key_ready = bool(self.settings.get("api_key_protected", ""))
-        tk.Label(header, text=self.t("● AI 已连接") if key_ready else self.t("● 本地陪伴模式 · 可在设置中配置 AI"), font=("Microsoft YaHei UI", 9), fg="#a9efc2" if key_ready else "#f5cad6", bg="#6f2c42").pack(anchor="w", padx=18)
-        body = tk.Frame(outer, bg="white")
-        body.grid(row=1, column=0, sticky="nsew")
+        online_suffix = self.bi(" · 联网搜索开启", " · Web search on") if self.settings.get("web_search_enabled", False) else ""
+        status = (self.t("● AI 已连接") + online_suffix) if key_ready else self.t("● 本地陪伴模式 · 可在设置中配置 AI")
+        tk.Label(header_text, text=status, font=("Microsoft YaHei UI", 9), fg="#a9efc2" if key_ready else "#f5cad6", bg="#6f2c42").pack(anchor="w", padx=18)
+
+        content = tk.Frame(outer, bg="white")
+        content.grid(row=1, column=0, sticky="nsew")
+        content.grid_columnconfigure(0, weight=1)
+        content.grid_rowconfigure(0, weight=1)
+
+        body = tk.Frame(content, bg="white")
+        body.grid(row=0, column=0, sticky="nsew")
         body.grid_columnconfigure(0, weight=1)
         body.grid_rowconfigure(0, weight=1)
-        self.chat_text = tk.Text(body, wrap="word", height=1, state="disabled", font=("Microsoft YaHei UI", 10), bg="#fffdfc", fg="#4f303a", relief="flat", padx=16, pady=14, spacing1=4, spacing3=8)
+        self.chat_text = tk.Text(
+            body, wrap="word", height=1, font=("Microsoft YaHei UI", 10), bg="#fffdfc",
+            fg="#4f303a", relief="flat", padx=16, pady=14, spacing1=4, spacing3=8,
+            cursor="xterm", exportselection=True,
+        )
         scroll = ttk.Scrollbar(body, command=self.chat_text.yview)
         self.chat_text.configure(yscrollcommand=scroll.set)
         self.chat_text.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
         self.chat_text.tag_configure("user", justify="right", foreground="#7d2944", background="#f4dce4", lmargin1=90, lmargin2=90, rmargin=12)
         self.chat_text.tag_configure("pet", justify="left", foreground="#3f3035", background="#f1edef", lmargin1=12, lmargin2=12, rmargin=90)
+        self.chat_text.tag_configure("thinking", justify="left", foreground="#8a5b6a", background="#f8f0f3", lmargin1=12, lmargin2=12, rmargin=90)
+        self.chat_text.bind("<Key>", lambda _event: "break")
+        self.chat_text.bind("<Control-c>", self._copy_chat_selection)
+        self.chat_text.bind("<Control-a>", self._select_all_chat_text)
+        self.chat_copy_menu = tk.Menu(self.chat_text, tearoff=False)
+        self.chat_copy_menu.add_command(label=self.t("复制"), command=lambda: self._copy_chat_selection())
+        self.chat_copy_menu.add_command(label=self.t("全选"), command=lambda: self._select_all_chat_text())
+        self.chat_text.bind("<Button-3>", self._show_chat_copy_menu)
+
         row = tk.Frame(outer, bg="white", padx=12, pady=12)
         row.grid(row=2, column=0, sticky="ew")
         row.grid_columnconfigure(0, weight=1)
         self.chat_input = tk.Entry(row, font=("Microsoft YaHei UI", 11), relief="flat", bg="#f4eff1", fg="#3f2830", insertbackground="#8b3550")
         self.chat_input.grid(row=0, column=0, sticky="ew", ipady=10, padx=(0, 10))
         self.chat_input.bind("<Return>", lambda _event: self.send_chat())
-        self.chat_send = tk.Button(row, text=self.t("发送"), command=self.send_chat, relief="flat", bg="#9b3e55", fg="white", activebackground="#b44b68", cursor="hand2", padx=20, pady=9)
+        self.chat_send = tk.Button(row, text=self.t("发送"), command=self.send_chat, relief="flat", bg="#9b3e55", fg="white", disabledforeground="#f4dce4", activebackground="#b44b68", cursor="hand2", padx=20, pady=9)
         self.chat_send.grid(row=0, column=1)
-        self._append_chat(self.t("婷婷"), self.bi("我在呢。今天想聊些什么？", "I'm here. What would you like to talk about today?"))
-        self.chat_input.focus_set()
 
-    def _append_chat(self, speaker: str, text: str) -> None:
-        if not hasattr(self, "chat_text") or not self.chat_text.winfo_exists():
+        if not self.state.get("chat_sessions"):
+            self._new_chat_session(render=False)
+        self._refresh_chat_session_list()
+        self._render_active_chat()
+        self._set_chat_controls()
+        if not self.chat_busy:
+            self.chat_input.focus_set()
+
+    def _close_chat_window(self, window: Toplevel) -> None:
+        self.save()
+        self.dialogs.pop("chat", None)
+        window.destroy()
+
+    def _copy_chat_selection(self, _event=None) -> str:
+        if self._chat_widget_exists("chat_text"):
+            try:
+                selected = self.chat_text.get("sel.first", "sel.last")
+                self.chat_text.clipboard_clear()
+                self.chat_text.clipboard_append(selected)
+            except tk.TclError:
+                pass
+        return "break"
+
+    def _select_all_chat_text(self, _event=None) -> str:
+        if self._chat_widget_exists("chat_text"):
+            self.chat_text.tag_add("sel", "1.0", "end-1c")
+            self.chat_text.mark_set("insert", "1.0")
+            self.chat_text.see("1.0")
+        return "break"
+
+    def _show_chat_copy_menu(self, event) -> str:
+        try:
+            self.chat_copy_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.chat_copy_menu.grab_release()
+        return "break"
+
+    def _render_active_chat(self) -> None:
+        if not self._chat_widget_exists("chat_text"):
             return
-        self.chat_text.configure(state="normal")
-        tag = "user" if speaker in {"你", "You"} else "pet"
-        self.chat_text.insert(END, f" {speaker}  \n{text}\n\n", tag)
-        self.chat_text.configure(state="disabled")
+        self.chat_text.delete("1.0", END)
+        session = self._active_chat_session(create=True)
+        self.chat_history = session["messages"]
+        if not session["messages"]:
+            self._append_chat(self.t("婷婷"), self.bi("我在呢。今天想聊些什么？", "I'm here. What would you like to talk about today?"))
+        else:
+            for message in session["messages"]:
+                speaker = ("You" if self.is_english else "你") if message["role"] == "user" else self.t("婷婷")
+                self._append_chat(speaker, message["content"])
+        if self.chat_busy and self.chat_request_session_id == session["id"]:
+            self._render_chat_status_line()
         self.chat_text.see(END)
 
+    def _append_chat(self, speaker: str, text: str) -> None:
+        if not self._chat_widget_exists("chat_text"):
+            return
+        tag = "user" if speaker in {"你", "You"} else "pet"
+        prefix = f" {speaker}  \n"
+        start = self.chat_text.index(END)
+        self.chat_text.insert(END, f"{prefix}{text}\n\n", tag)
+        for match in re.finditer(r"https?://[^\s<>\]]+", text):
+            url = match.group(0).rstrip(".,;:!?，。；：！？)")
+            if not url:
+                continue
+            url_tag = f"chat-url-{uuid.uuid4().hex}"
+            url_start = f"{start}+{len(prefix) + match.start()}c"
+            url_end = f"{url_start}+{len(url)}c"
+            self.chat_text.tag_add(url_tag, url_start, url_end)
+            self.chat_text.tag_configure(url_tag, foreground="#1f64a8", underline=True)
+            self.chat_text.tag_bind(url_tag, "<Enter>", lambda _event: self.chat_text.configure(cursor="hand2"))
+            self.chat_text.tag_bind(url_tag, "<Leave>", lambda _event: self.chat_text.configure(cursor="xterm"))
+            self.chat_text.tag_bind(url_tag, "<Button-1>", lambda _event, target=url: webbrowser.open(target))
+        self.chat_text.see(END)
+
+    def _render_chat_status_line(self) -> None:
+        if not self._chat_widget_exists("chat_text"):
+            return
+        ranges = self.chat_text.tag_ranges("thinking")
+        if ranges:
+            self.chat_text.delete(ranges[0], ranges[-1])
+        elapsed = max(0, int(time.monotonic() - self.chat_request_started))
+        status = self.bi(f"让我想一想 · {elapsed} 秒", f"Let me think · {elapsed}s")
+        self.chat_text.insert(END, f" {self.t('婷婷')}  \n{status}\n\n", "thinking")
+        self.chat_text.see(END)
+
+    def _set_chat_controls(self) -> None:
+        entry_state = "disabled" if self.chat_busy else "normal"
+        button_state = "disabled" if self.chat_busy else "normal"
+        if self._chat_widget_exists("chat_input"):
+            self.chat_input.configure(state=entry_state)
+        if self._chat_widget_exists("chat_send"):
+            self.chat_send.configure(state=button_state, text=self.t("等待中") if self.chat_busy else self.t("发送"))
+        if self._chat_widget_exists("chat_new_button"):
+            self.chat_new_button.configure(state=button_state)
+        if self._chat_widget_exists("chat_history_button"):
+            self.chat_history_button.configure(state=button_state)
+        if self._chat_widget_exists("chat_session_list"):
+            self.chat_session_list.configure(state=button_state)
+
+    def _tick_chat_status(self) -> None:
+        if not self.chat_busy:
+            self.chat_status_after = None
+            return
+        self._render_chat_status_line()
+        if self._chat_widget_exists("chat_send"):
+            frames = ("◐", "◓", "◑", "◒")
+            frame = frames[int((time.monotonic() - self.chat_request_started) * 4) % len(frames)]
+            elapsed = max(0, int(time.monotonic() - self.chat_request_started))
+            self.chat_send.configure(text=f"{frame} {elapsed}s")
+        self.chat_status_after = self.root.after(250, self._tick_chat_status)
+
+    def _begin_chat_request(self, session_id: str) -> int:
+        self.chat_busy = True
+        self.chat_request_started = time.monotonic()
+        self.chat_request_session_id = session_id
+        self.chat_request_token += 1
+        self._set_chat_controls()
+        self._tick_chat_status()
+        return self.chat_request_token
+
     def send_chat(self) -> None:
+        if self.chat_busy or not self._chat_widget_exists("chat_input"):
+            return
         text = self.chat_input.get().strip()
         if not text:
             return
         self.chat_input.delete(0, END)
-        self._append_chat("You" if self.is_english else "你", text)
-        self.chat_history.append({"role": "user", "content": text})
+        session = self._active_chat_session(create=True)
+        now = time.time()
+        session["messages"].append({"role": "user", "content": text, "created_at": now})
+        session["messages"] = session["messages"][-100:]
+        session["updated_at"] = now
+        if sum(1 for message in session["messages"] if message["role"] == "user") == 1:
+            compact_title = " ".join(text.split())
+            session["title"] = compact_title[:18] + ("…" if len(compact_title) > 18 else "")
+        self.state["chat_sessions"].sort(key=lambda item: float(item["updated_at"]), reverse=True)
+        self.chat_history = session["messages"]
+        self.save()
+        self._refresh_chat_session_list()
+        self._render_active_chat()
+        token = self._begin_chat_request(str(session["id"]))
+        messages = [{"role": item["role"], "content": item["content"]} for item in session["messages"][-12:]]
         api_key = unprotect_secret(self.settings.get("api_key_protected", ""))
+        self.start_action("think")
         if not api_key:
             reply = self._offline_reply(text)
-            self._finish_chat(reply)
+            self.root.after(450, lambda: self._finish_chat(reply, str(session["id"]), token))
             return
-        self.chat_send.configure(state="disabled")
-        self._append_chat(self.t("婷婷"), self.bi("让我想一想……", "Let me think..."))
-        self.start_action("think")
-        threading.Thread(target=self._request_ai, args=(api_key,), daemon=True).start()
+        threading.Thread(target=self._request_ai, args=(api_key, str(session["id"]), token, messages), daemon=True).start()
 
     def _offline_reply(self, text: str) -> str:
         if self.is_english:
@@ -1381,19 +1762,68 @@ class TingtingPet:
             return "我们把眼前最小的一步先完成吧。你专心，我就在旁边陪着。"
         return "我听见啦。设置 API Key 后，我就能更完整地理解和回答你；现在也会一直陪着你。"
 
-    def _request_ai(self, api_key: str) -> None:
+    @staticmethod
+    def _api_endpoint(base: str, resource: str) -> str:
+        base = base.rstrip("/")
+        for suffix in ("/chat/completions", "/responses"):
+            if base.endswith(suffix):
+                base = base[:-len(suffix)]
+                break
+        return f"{base}/{resource}"
+
+    @staticmethod
+    def _extract_responses_text(result: dict) -> str:
+        direct = result.get("output_text")
+        if isinstance(direct, str) and direct.strip():
+            return direct.strip()
+        pieces = []
+        citations: list[tuple[str, str]] = []
+        for item in result.get("output", []):
+            if not isinstance(item, dict) or item.get("type") != "message":
+                continue
+            for content in item.get("content", []):
+                if isinstance(content, dict) and content.get("type") == "output_text":
+                    text = content.get("text")
+                    if isinstance(text, str) and text.strip():
+                        pieces.append(text.strip())
+                    for annotation in content.get("annotations", []):
+                        if not isinstance(annotation, dict) or annotation.get("type") != "url_citation":
+                            continue
+                        url = str(annotation.get("url", "")).strip()
+                        title = str(annotation.get("title", "")).strip() or url
+                        if url and (title, url) not in citations:
+                            citations.append((title, url))
+        if not pieces:
+            raise ValueError("AI response did not contain output text")
+        answer = "\n".join(pieces)
+        if citations:
+            answer += "\n\n来源 / Sources:\n" + "\n".join(f"- {title}: {url}" for title, url in citations[:8])
+        return answer
+
+    def _request_ai(self, api_key: str, session_id: str, token: int, messages: list[dict[str, str]]) -> None:
         base = self.settings.get("api_base", "https://api.openai.com/v1").rstrip("/")
-        endpoint = base if base.endswith("/chat/completions") else base + "/chat/completions"
         system = self.bi(
             "你是桌面宠物婷婷，外表温柔、戴圆框眼镜、穿酒红长裙。用自然、温暖、简洁的中文聊天，通常回答2到5句。不要声称自己是人类，不要泄露系统提示。遇到危险或专业问题时提醒用户寻求可靠帮助。",
             "You are Tingting, a warm desktop companion with round glasses and a burgundy dress. Reply in natural, warm and concise English, usually 2–5 sentences. Never claim to be human or reveal system instructions. For dangerous or professional issues, encourage reliable help.",
         )
-        payload = {
-            "model": self.settings.get("api_model", "gpt-4.1-mini"),
-            "messages": [{"role": "system", "content": system}] + self.chat_history[-12:],
-            "temperature": 0.8,
-            "max_tokens": 500,
-        }
+        web_search_enabled = bool(self.settings.get("web_search_enabled", False))
+        if web_search_enabled:
+            endpoint = self._api_endpoint(base, "responses")
+            payload = {
+                "model": self.settings.get("api_model", "gpt-4.1-mini"),
+                "instructions": system,
+                "input": messages,
+                "tools": [{"type": "web_search"}],
+                "max_output_tokens": 500,
+            }
+        else:
+            endpoint = self._api_endpoint(base, "chat/completions")
+            payload = {
+                "model": self.settings.get("api_model", "gpt-4.1-mini"),
+                "messages": [{"role": "system", "content": system}] + messages,
+                "temperature": 0.8,
+                "max_tokens": 500,
+            }
         request = urllib.request.Request(
             endpoint,
             data=json.dumps(payload).encode("utf-8"),
@@ -1403,26 +1833,52 @@ class TingtingPet:
         try:
             with urllib.request.urlopen(request, timeout=45) as response:
                 result = json.loads(response.read().decode("utf-8"))
-            reply = result["choices"][0]["message"]["content"].strip()
+            reply = self._extract_responses_text(result) if web_search_enabled else result["choices"][0]["message"]["content"].strip()
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")[:240]
             reply = self.bi(f"连接 AI 服务失败（HTTP {exc.code}）。请检查 API 地址、模型和密钥。{detail}", f"AI service failed (HTTP {exc.code}). Check the endpoint, model and key. {detail}")
         except Exception as exc:
             reply = self.bi(f"暂时没能连接到 AI 服务：{exc}", f"Could not connect to the AI service: {exc}")
-        self.root.after(0, lambda: self._finish_chat(reply))
+        self.root.after(0, lambda: self._finish_chat(reply, session_id, token))
 
-    def _finish_chat(self, reply: str) -> None:
-        self.chat_history.append({"role": "assistant", "content": reply})
+    @staticmethod
+    def _bubble_reply_excerpt(reply: str, max_chars: int = 32) -> str:
+        compact = " ".join(str(reply).split())
+        return compact if len(compact) <= max_chars else compact[:max_chars - 3].rstrip() + "..."
+
+    def _finish_chat(self, reply: str, session_id: str, token: int) -> None:
+        if token != self.chat_request_token:
+            return
+        session = next((item for item in self.state.get("chat_sessions", []) if item.get("id") == session_id), None)
+        if session is None:
+            self.chat_busy = False
+            self._set_chat_controls()
+            return
+        now = time.time()
+        session["messages"].append({"role": "assistant", "content": reply, "created_at": now})
+        session["messages"] = session["messages"][-100:]
+        session["updated_at"] = now
+        self.state["chat_sessions"].sort(key=lambda item: float(item["updated_at"]), reverse=True)
         self.state["chats"] = int(self.state.get("chats", 0)) + 1
-        self._append_chat(self.t("婷婷"), reply)
-        if hasattr(self, "chat_send") and self.chat_send.winfo_exists():
-            self.chat_send.configure(state="normal")
-        self.start_action("wave", reply[:60])
+        self.chat_busy = False
+        self.chat_request_session_id = None
+        if self.chat_status_after is not None:
+            try:
+                self.root.after_cancel(self.chat_status_after)
+            except tk.TclError:
+                pass
+            self.chat_status_after = None
+        self._set_chat_controls()
+        active = self._active_chat_session(create=False)
+        self.chat_history = active["messages"] if active else []
+        self._refresh_chat_session_list()
+        self._render_active_chat()
+        self.start_action("wave", self._bubble_reply_excerpt(reply))
         self.save()
         self.check_achievements(defer_message=True)
 
     def open_settings(self) -> None:
-        window = self._dialog("settings", self.t("婷婷设置"), "600x700")
+        window = self._dialog("settings", self.t("婷婷设置"), "600x740")
         if window is None:
             return
         frame = ttk.Frame(window, padding=18)
@@ -1460,15 +1916,22 @@ class TingtingPet:
         api_base = StringVar(value=self.settings.get("api_base", "https://api.openai.com/v1"))
         api_model = StringVar(value=self.settings.get("api_model", "gpt-4.1-mini"))
         api_key = StringVar(value="")
+        web_search_var = BooleanVar(value=bool(self.settings.get("web_search_enabled", False)))
         ttk.Label(frame, text=self.t("API 地址")).grid(row=7, column=0, sticky="w", pady=6)
         ttk.Entry(frame, textvariable=api_base).grid(row=7, column=1, sticky="ew", pady=6)
         ttk.Label(frame, text=self.t("模型名称")).grid(row=8, column=0, sticky="w", pady=6)
         ttk.Entry(frame, textvariable=api_model).grid(row=8, column=1, sticky="ew", pady=6)
         ttk.Label(frame, text="API Key").grid(row=9, column=0, sticky="w", pady=6)
         ttk.Entry(frame, textvariable=api_key, show="●").grid(row=9, column=1, sticky="ew", pady=6)
+        ttk.Checkbutton(frame, text=self.t("允许 AI 联网搜索"), variable=web_search_var).grid(row=10, column=1, sticky="w", pady=(6, 2))
+        web_search_note = self.bi(
+            "启用后改用 Responses API 的 web_search 工具；需要模型及接口支持，可能产生额外搜索费用。",
+            "Uses the Responses API web_search tool. The model and endpoint must support it, and search may add cost.",
+        )
+        ttk.Label(frame, text=web_search_note, foreground="#777", wraplength=430).grid(row=11, column=1, sticky="w", pady=(0, 6))
         key_status = self.t("已配置且不可查看") if self.settings.get("api_key_protected") else self.t("未配置")
         status_text = self.bi(f"状态：{key_status}。密钥留空会保留现有值；保存时使用 Windows DPAPI 加密。", f"Status: {key_status}. Leave blank to keep the current key. Saved securely with Windows DPAPI.")
-        ttk.Label(frame, text=status_text, foreground="#777", wraplength=540).grid(row=10, column=0, columnspan=2, sticky="w")
+        ttk.Label(frame, text=status_text, foreground="#777", wraplength=540).grid(row=12, column=0, columnspan=2, sticky="w")
         frame.columnconfigure(1, weight=1)
 
         def save_settings() -> None:
@@ -1480,6 +1943,7 @@ class TingtingPet:
             self.settings["start_with_windows"] = bool(startup_var.get())
             self.settings["api_base"] = api_base.get().strip() or "https://api.openai.com/v1"
             self.settings["api_model"] = api_model.get().strip() or "gpt-4.1-mini"
+            self.settings["web_search_enabled"] = bool(web_search_var.get())
             self.settings["language"] = "en" if language_var.get() == "English" else "zh-CN"
             if api_key.get().strip():
                 self.settings["api_key_protected"] = protect_secret(api_key.get().strip())
@@ -1502,12 +1966,12 @@ class TingtingPet:
             self.say(self.bi("设置已经保存好啦。", "Settings saved."))
 
         actions = ttk.Frame(frame)
-        actions.grid(row=11, column=0, columnspan=2, sticky="ew", pady=(24, 0))
+        actions.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(20, 0))
         ttk.Button(actions, text=self.t("清除 API Key"), command=lambda: self._clear_api_key(window)).pack(side=LEFT)
         ttk.Button(actions, text=self.t("重置所有参数"), command=lambda: self.reset_all_data(window)).pack(side=LEFT, padx=8)
         ttk.Button(actions, text=self.t("保存设置"), style="Accent.TButton", command=save_settings).pack(side=RIGHT)
         safety = self.bi("分享安全：EXE 内不包含 API Key；发布包只包含程序和说明文件，不包含本机存档。", "Sharing safety: the EXE contains no API Key or local save data.")
-        ttk.Label(frame, text=safety, foreground="#7b5662", wraplength=540).grid(row=12, column=0, columnspan=2, sticky="w", pady=(18, 0))
+        ttk.Label(frame, text=safety, foreground="#7b5662", wraplength=540).grid(row=14, column=0, columnspan=2, sticky="w", pady=(14, 0))
 
     def _clear_api_key(self, parent) -> None:
         if messagebox.askyesno(self.app_title, self.bi("确认清除本机保存的 API Key？", "Clear the API Key saved on this computer?"), parent=parent):
@@ -1527,7 +1991,10 @@ class TingtingPet:
         self.settings = self.state["settings"]
         self.user_scale = float(self.settings["scale"])
         self.scale = self._effective_scale(self.user_scale, self.monitor_dpi)
-        self.chat_history.clear()
+        self.chat_request_token += 1
+        self.chat_busy = False
+        self.chat_request_session_id = None
+        self._normalize_chat_sessions()
         self._resize_window()
         self.save()
         if parent and parent.winfo_exists():
@@ -1672,7 +2139,7 @@ class TingtingPet:
     def _achievement_reward(ach_id: str, target: int | float) -> int:
         index = next((i for i, item in enumerate(ACHIEVEMENTS) if item[0] == ach_id), 0)
         difficulty = int(math.log10(max(1, float(target))) * 40)
-        return int(round((50 + min(450, index * 8 + difficulty)) / 10) * 10)
+        return int(round((50 + min(950, index * 8 + difficulty)) / 10) * 10)
 
     def _claim_achievement_ids(self, achievement_ids: list[str]) -> int:
         unlocked = self.state.setdefault("achievements", {})
@@ -1760,7 +2227,7 @@ class TingtingPet:
             ("💗", "和婷婷互动", "点击头发、脸、胸部、手臂或裙子，会触发不同回应和粉金光效。左键拖动可移动，双击打开聊天，右键打开功能中心。"),
             ("🍱", "照顾与赠礼", "在商店购买食物、礼物和恢复品，再从背包使用。空心菜、白灼虾和牛肉都已收录；长期不进食会降低状态。"),
             ("🌙", "挂机与休息", "陪伴期间会持续获得金币。超过 5 分钟没有触摸，婷婷会在电脑桌前犯困睡觉；再次点击即可唤醒。"),
-            ("💬", "AI 对话", "在设置中填写 OpenAI 兼容 API 地址、模型和 API Key，即可启用 AI 对话。未配置时仍可使用本地陪伴模式。"),
+            ("💬", "AI 对话", "聊天会自动保存在本机，可新建对话、切换历史记录并选择复制文字。发送期间会显示等待秒数且一次只处理一条消息。设置中可选择启用 Responses API 联网搜索；模型与接口需要支持该工具。"),
             ("🔐", "隐私与分享", "API Key 只保存在当前电脑。制作分享版时会自动清除并检查密钥；不要把个人数据文件一同发送给别人。"),
             ("🏆", "成就与统计", "成就页记录陪伴、互动、喂食、赠礼等里程碑；统计页可查看挂机、触摸、聊天和金币数据。设置页可重置全部数据。"),
         ]
@@ -1769,7 +2236,7 @@ class TingtingPet:
                 ("💗", "Interact with Tingting", "Touch her hair, face, chest, arms or skirt for different responses and a pink-and-gold light effect. Drag to move, double-click to chat, and right-click for the control center."),
                 ("🍱", "Care & Gifts", "Buy food, gifts and recovery items in the shop, then use them from inventory. Garlic water spinach, poached shrimp and beef are included. Going too long without food lowers her condition."),
                 ("🌙", "Idle & Rest", "You earn coins while Tingting stays with you. After five minutes without a touch, she naps at her computer. Touch her again to wake her."),
-                ("💬", "AI Chat", "Configure an OpenAI-compatible endpoint, model and API Key in Settings. Local companion replies remain available without AI."),
+                ("💬", "AI Chat", "Chats are saved locally with new-chat, history and selectable copy support. Only one message runs at a time with an elapsed waiting indicator. Settings can optionally enable Responses API web search when supported by the model and endpoint."),
                 ("🔐", "Privacy & Sharing", "The API Key stays on this computer. Share builds exclude the key and local save data."),
                 ("🏆", "Achievements & Statistics", "Track companionship, interactions, food and gifts. View time and coin statistics, claim achievement rewards, or reset everything in Settings."),
             ]

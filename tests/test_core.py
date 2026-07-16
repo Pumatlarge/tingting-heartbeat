@@ -6,7 +6,7 @@ import unittest
 from PIL import Image
 
 from tingting_pet.app import TingtingPet, resource_path
-from tingting_pet.catalog import FOOD_BY_NAME, GIFT_BY_NAME, LOGICAL_ACTIONS, RECOVERY_BY_NAME
+from tingting_pet.catalog import ACHIEVEMENTS, FOOD_BY_NAME, GIFT_BY_NAME, LOGICAL_ACTIONS, RECOVERY_BY_NAME
 from tingting_pet.storage import default_state, protect_secret, unprotect_secret
 from tingting_pet.i18n import ACHIEVEMENT_TEXT, ACTION_LABELS, ITEM_NAMES, text
 
@@ -38,6 +38,8 @@ class CoreTests(unittest.TestCase):
     def test_desktop_sleep_action_and_ui_assets(self) -> None:
         self.assertEqual(LOGICAL_ACTIONS["desk_sleep"]["effect"], "desk_sleep")
         self.assertGreaterEqual(LOGICAL_ACTIONS["desk_sleep"]["duration"], 300)
+        self.assertLess(TingtingPet._sprite_scale_for_effect("desk_sleep"), 1.0)
+        self.assertEqual(TingtingPet._sprite_scale_for_effect("idle"), 1.0)
         icon_names = ["wave", "jump", "dance", "think", "work", "review", "sleepy", "walk", "shy", "celebrate"]
         self.assertTrue(all(resource_path(f"assets/action-icons/{name}.png").is_file() for name in icon_names))
         cursor_data = resource_path("assets/heart.cur").read_bytes()
@@ -47,7 +49,8 @@ class CoreTests(unittest.TestCase):
     def test_english_language_defaults_and_catalog_coverage(self) -> None:
         self.assertEqual(default_state()["settings"]["language"], "zh-CN")
         self.assertEqual(text("设置", "en"), "Settings")
-        self.assertEqual(len(ACHIEVEMENT_TEXT), 37)
+        self.assertEqual(len(ACHIEVEMENT_TEXT), len(ACHIEVEMENTS))
+        self.assertGreaterEqual(len(ACHIEVEMENTS), 50)
         self.assertGreaterEqual(len(ACTION_LABELS), len(LOGICAL_ACTIONS))
         self.assertIn("蒜蓉空心菜", ITEM_NAMES)
 
@@ -126,8 +129,33 @@ class CoreTests(unittest.TestCase):
 
     def test_api_key_default_and_dpapi_roundtrip(self) -> None:
         self.assertEqual(default_state()["settings"]["api_key_protected"], "")
+        self.assertFalse(default_state()["settings"]["web_search_enabled"])
+        self.assertEqual(default_state()["chat_sessions"], [])
         secret = "test-key-never-package"
         self.assertEqual(unprotect_secret(protect_secret(secret)), secret)
+
+    def test_mood_decay_accelerates_with_neglect(self) -> None:
+        fresh = TingtingPet._mood_decay_per_minute(0)
+        six_hours = TingtingPet._mood_decay_per_minute(6)
+        one_day = TingtingPet._mood_decay_per_minute(24)
+        self.assertGreater(six_hours, fresh)
+        self.assertGreater(one_day, six_hours)
+
+    def test_chat_sessions_response_parsing_and_bubble_excerpt(self) -> None:
+        pet = self.make_pet()
+        session = pet._new_chat_session(render=False)
+        session["messages"].append({"role": "user", "content": "请记住这段对话", "created_at": 1.0})
+        pet.state["active_chat_id"] = session["id"]
+        pet._normalize_chat_sessions()
+        self.assertEqual(pet.chat_history[0]["content"], "请记住这段对话")
+        self.assertEqual(TingtingPet._api_endpoint("https://api.openai.com/v1/chat/completions", "responses"), "https://api.openai.com/v1/responses")
+        response = {"output": [{"type": "message", "content": [{"type": "output_text", "text": "联网回答", "annotations": [{"type": "url_citation", "title": "示例来源", "url": "https://example.com/source"}]}]}]}
+        parsed = TingtingPet._extract_responses_text(response)
+        self.assertIn("联网回答", parsed)
+        self.assertIn("https://example.com/source", parsed)
+        excerpt = TingtingPet._bubble_reply_excerpt("这是一段很长的回答，应该只在人物头顶显示简短摘要，剩余内容使用省略号处理。")
+        self.assertLessEqual(len(excerpt), 32)
+        self.assertTrue(excerpt.endswith("..."))
 
     def test_premultiplied_resize_preserves_transparency(self) -> None:
         image = Image.new("RGBA", (16, 16), (0, 0, 0, 0))

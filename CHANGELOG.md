@@ -1,5 +1,31 @@
 # 心动婷婷更新记录 / Tingting Heartbeat Changelog
 
+## v1.5.0
+
+- AI 对话会自动保存在本机，关闭聊天窗口后不再丢失。
+- 新增多会话管理，可在聊天窗口右上角新建对话或通过历史菜单切换记录。
+- 聊天文字支持选择、`Ctrl+C`、`Ctrl+A` 和右键复制；联网回答中的来源链接可直接点击。
+- 发送期间显示“让我想一想 · N 秒”和旋转等待图标，并锁定输入、新建和历史切换，确保一次只处理一条消息。
+- 人物头顶只显示 AI 回答的简短摘要，过长内容自动以 `...` 省略，完整回答仍保留在聊天窗口。
+- 设置中新增可选 Responses API 联网搜索；模型及接口需要支持 `web_search` 工具。
+- 五分钟闲置后的桌前睡眠人物缩小至常规尺寸的 88%，使人物、桌子和电脑比例更协调。
+- 心情改为持续衰减，并在 6 小时、24 小时未送礼后分级加速；离线期间同样计算。
+- 成就由 37 项扩展至 50 项，新增千小时陪伴、万次互动、百日/周年连续陪伴、十万金币等高难度目标，并提高高级奖励上限。
+- 聊天窗口移除左侧历史面板，改为完整宽度的单栏布局。
+
+### English
+
+- AI conversations are now saved locally and remain available after closing the chat window.
+- Added multi-conversation management with New Chat and History controls in the top-right corner.
+- Chat text is selectable and supports Ctrl+C, Ctrl+A, and context-menu copying; cited web sources are clickable.
+- While a reply is running, the UI shows an elapsed “Let me think” status and animated wait button, locking the composer and conversation controls to enforce one request at a time.
+- Long AI replies are shortened with `...` above the character while the complete answer remains in the chat window.
+- Added optional Responses API web search when supported by the configured model and endpoint.
+- Reduced the five-minute idle desk-sleep character to 88% of the regular sprite scale.
+- Mood now decays continuously, accelerates after 6 and 24 hours without a gift, and also updates while offline.
+- Expanded achievements from 37 to 50 with advanced long-term goals and higher reward ceilings.
+- Removed the left conversation sidebar in favor of a full-width, single-column chat layout.
+
 ## v1.4.2
 
 - 修复双屏或多屏环境下右键功能中心超出当前显示器、底部按钮显示不全的问题。

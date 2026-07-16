@@ -125,7 +125,7 @@ def run() -> None:
 
             app.open_chat()
             chat = app.dialogs["chat"]
-            chat.geometry("700x650+110+45")
+            chat.geometry("780x650+110+45")
             pump(app, 0.7)
             capture_window(chat, MEDIA / "chat.png")
             app.dialogs.pop("chat", None)
@@ -142,7 +142,7 @@ def run() -> None:
 
             app.open_chat()
             chat = app.dialogs["chat"]
-            chat.geometry("700x650+110+45")
+            chat.geometry("780x650+110+45")
             pump(app, 0.6)
             capture_window(chat, MEDIA / "chat-en.png")
 
