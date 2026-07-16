@@ -14,6 +14,8 @@
   <a href="#license">License</a>
 </p>
 
+Download: https://pan.baidu.com/s/1EKhXNDwNXucy-r-BCxfDWw KEY: 6688 
+
 ## Highlights
 
 - Transparent, always-on-top desktop character that can be dragged around the screen.
