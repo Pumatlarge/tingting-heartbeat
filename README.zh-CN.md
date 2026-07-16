@@ -1,0 +1,100 @@
+# 心动婷婷 / Tingting Heartbeat
+
+<p align="center">
+  <img src="assets/tingting-heartbeat-icon.png" width="160" alt="心动婷婷图标">
+</p>
+
+<p align="center">
+  一款温暖、可互动的 Windows 桌面陪伴小游戏，支持触摸反馈、动作、喂食、送礼、成就、统计和可选 AI 对话。
+</p>
+
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="#下载安装">下载安装</a> ·
+  <a href="#隐私与本地数据">隐私说明</a> ·
+  <a href="#开源协议">开源协议</a>
+</p>
+
+## 主要功能
+
+- 透明置顶桌面人物，可在桌面自由拖动。
+- 触摸头发、脸、胸部、手臂和裙子会触发不同台词、动作及表情。
+- 28 种人物动作，包括挥手、跳舞、工作、思考、睡觉和庆祝。
+- 超过五分钟没有互动后，婷婷会自然进入桌前睡眠状态。
+- 20 道菜品，包含蒜蓉空心菜、白灼虾和香煎牛肉。
+- 礼物、恢复品、金币、挂机及离线收益、背包、心情、饱腹和元气系统。
+- 37 项本地成就，达成后可以领取金币奖励。
+- 记录陪伴、挂机、触摸、聊天、喂食、送礼、金币及互动偏好。
+- 可在设置中配置 OpenAI 兼容接口，实现 AI 对话。
+- 默认简体中文，可切换英文。
+- 支持实时调整人物大小，并提供专属爱心鼠标。
+- 使用安装版覆盖升级时会保留原有游戏数据。
+
+## 下载安装
+
+请前往本仓库的 **Releases** 页面下载最新 Windows 安装包。
+
+安装包支持直接覆盖升级。游戏数据独立保存在：
+
+```text
+%APPDATA%\TingtingDesktopPet
+```
+
+安装新版或使用标准卸载程序都不会删除这个目录。
+
+## 操作方式
+
+- 按住鼠标左键拖动：移动婷婷。
+- 点击人物不同部位：触发专属反应。
+- 双击人物：打开聊天。
+- 右键人物：打开功能中心。
+- 隐藏或关闭人物后：通过系统托盘重新显示。
+
+## AI 对话
+
+在“设置”中填写 API 地址、模型名称和 API Key。程序支持 OpenAI 兼容接口。
+
+API Key 不会被打包进分享文件，在 Windows 中会通过当前用户的 DPAPI 加密后保存到本机。未配置 API Key 时，聊天窗口仍提供少量本地陪伴回复。
+
+## 隐私与本地数据
+
+全部游戏进度都只保存在本机。构建脚本会检查 `state.json` 和疑似 API Key 的内容，降低意外公开个人存档或密钥的风险。
+
+分享时请使用 `release` 目录生成的发布文件，不要复制 `%APPDATA%\TingtingDesktopPet` 数据目录。
+
+## 从源码构建
+
+环境要求：
+
+- Windows 10 或更高版本
+- Python 3.12+
+- PowerShell
+- 制作安装包时需要 Inno Setup 6
+
+构建便携版：
+
+```powershell
+.\build.ps1
+```
+
+构建安装版：
+
+```powershell
+.\build-installer.ps1 -Version 1.4.0
+```
+
+运行测试：
+
+```powershell
+python -m unittest discover -s tests -p "test_core.py"
+python tests\gui_smoke.py
+python tests\startup_splash_smoke.py
+```
+
+## 开源协议
+
+程序源代码采用 [MIT License](LICENSE)。
+
+婷婷的人物肖像、精灵图、头像、图标及其他角色美术素材不属于 MIT 授权范围，单独适用[人物素材授权说明](ASSETS_LICENSE.md)：允许结合本项目进行个人、非商业使用，但不允许未经授权的商业使用或将人物素材单独转载、出售。
+
+这种双层授权方式既方便其他人学习和改进代码，也能保护婷婷的个人形象和角色素材。

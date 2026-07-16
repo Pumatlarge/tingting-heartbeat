@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Build and release outputs
+build/
+dist/
+release/
+*.log
+
+# Local game data and secrets
+state.json
+.env
+.env.*
+*.key
+*.pem
+
+# Generated QA files
+qa/
+
+# Editors and OS files
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
