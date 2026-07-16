@@ -26,20 +26,18 @@ def heart_shape(draw: ImageDraw.ImageDraw, offset=(0, 0), color="#df4f78", outli
 
 cursor_large = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
 cursor_draw = ImageDraw.Draw(cursor_large)
-# A broad, compact heart reads clearly as a cursor and does not feel vertically stretched.
-cursor_draw.ellipse((6, 18, 66, 78), fill="#ffffff")
-cursor_draw.ellipse((62, 18, 122, 78), fill="#ffffff")
-cursor_draw.polygon(((6, 50), (122, 50), (64, 116)), fill="#ffffff")
-cursor_draw.ellipse((12, 24, 65, 75), fill="#df4f78")
-cursor_draw.ellipse((63, 24, 116, 75), fill="#df4f78")
-cursor_draw.polygon(((12, 52), (116, 52), (64, 108)), fill="#df4f78")
+# Keep the normal arrow tip as the hotspot so switching cursors never looks like
+# the pointer jumped. A compact heart sits beside the arrow as the pet accent.
+cursor_draw.polygon(((4, 4), (4, 92), (29, 68), (49, 112), (65, 104), (45, 64), (82, 64)), fill="#2b2024")
+cursor_draw.polygon(((10, 10), (10, 78), (29, 60), (51, 103), (57, 99), (38, 58), (69, 58)), fill="#ffffff")
+heart_shape(cursor_draw, offset=(66, 49), color="#df4f78", outline="#ffffff", scale=2)
 cursor = cursor_large.resize((32, 32), Image.Resampling.LANCZOS)
 cursor.save(root / "assets" / "heart-cursor.png")
 png_buffer = io.BytesIO()
 cursor.save(png_buffer, format="PNG")
 png_data = png_buffer.getvalue()
 cur_header = struct.pack("<HHH", 0, 2, 1)
-cur_entry = struct.pack("<BBBBHHII", 32, 32, 0, 0, 16, 27, len(png_data), 22)
+cur_entry = struct.pack("<BBBBHHII", 32, 32, 0, 0, 2, 2, len(png_data), 22)
 (root / "assets" / "heart.cur").write_bytes(cur_header + cur_entry + png_data)
 
 

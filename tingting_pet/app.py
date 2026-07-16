@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import json
 import math
 import os
@@ -16,7 +17,7 @@ import tkinter.font as tkfont
 from tkinter import BOTH, END, LEFT, RIGHT, VERTICAL, BooleanVar, DoubleVar, StringVar, Tk, Toplevel
 from tkinter import messagebox, ttk
 
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageChops, ImageDraw, ImageTk
 
 from .catalog import (
     ACHIEVEMENTS,
@@ -39,6 +40,23 @@ CELL_W, CELL_H = 192, 208
 APP_TITLE = "心动婷婷"
 
 
+def enable_process_dpi_awareness() -> None:
+    if sys.platform != "win32":
+        return
+    try:
+        set_context = ctypes.windll.user32.SetProcessDpiAwarenessContext
+        set_context.argtypes = [ctypes.c_void_p]
+        set_context.restype = ctypes.c_int
+        if set_context(ctypes.c_void_p(-4)):
+            return
+    except Exception:
+        pass
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)
+    except Exception:
+        pass
+
+
 def resource_path(relative: str) -> Path:
     root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[1]))
     return root / relative
@@ -46,6 +64,7 @@ def resource_path(relative: str) -> Path:
 
 class TingtingPet:
     def __init__(self) -> None:
+        enable_process_dpi_awareness()
         self.root = Tk()
         self.root.withdraw()
         self.state = load_state()
@@ -57,7 +76,6 @@ class TingtingPet:
         self.action_started = time.monotonic()
         self.frame_cursor = 0
         self.last_frame_time = 0.0
-        self.last_frame_time = 0.0
         self.walk_direction = 1
         self.drag_start = None
         self.dragged = False
@@ -65,6 +83,11 @@ class TingtingPet:
         self.last_part_line: dict[str, str] = {}
         self.last_rendered_alpha = None
         self.current_visible_bbox = (0, 0, CELL_W, CELL_H)
+        self.click_light_started = 0.0
+        self.click_light_point: tuple[float, float] | None = None
+        self.last_click_light_render = 0.0
+        self.last_render_source: Image.Image | None = None
+        self.last_render_effect = ""
         self.last_activity = time.monotonic()
         self.last_touch_at = self.last_activity
         self.sleep_mode = False
@@ -110,7 +133,7 @@ class TingtingPet:
 
     def _show_startup_splash(self, welcome: str) -> None:
         if os.environ.get("TINGTING_SKIP_SPLASH") == "1":
-            self.root.deiconify()
+            self._reveal_pet_window()
             self.start_action("wave", welcome)
             return
         splash = Toplevel(self.root)
@@ -119,8 +142,7 @@ class TingtingPet:
         splash.attributes("-topmost", True)
         splash.configure(bg="#f7dfe5")
         width, height = 430, 320
-        x = (splash.winfo_screenwidth() - width) // 2
-        y = (splash.winfo_screenheight() - height) // 2
+        x, y = self._centered_window_position(width, height)
         splash.geometry(f"{width}x{height}+{x}+{y}")
         try:
             splash.attributes("-alpha", 0.0)
@@ -164,8 +186,7 @@ class TingtingPet:
             if elapsed >= 2.25:
                 splash.destroy()
                 self.startup_splash = None
-                self.root.deiconify()
-                self.root.lift()
+                self._reveal_pet_window()
                 self.start_action("wave", welcome)
                 return
             splash.after(50, animate)
@@ -241,12 +262,6 @@ class TingtingPet:
             self.root.iconbitmap(str(resource_path("assets/tingting.ico")))
         except tk.TclError:
             pass
-        try:
-            import ctypes
-
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
-        except Exception:
-            pass
         self.root.title(self.app_title)
         style = ttk.Style(self.root)
         try:
@@ -261,6 +276,10 @@ class TingtingPet:
         style.configure("Muted.TLabel", foreground="#76666b")
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", bool(self.settings.get("always_on_top", True)))
+        try:
+            self.root.wm_attributes("-toolwindow", True)
+        except tk.TclError:
+            pass
         self.root.configure(bg=TRANSPARENT)
         try:
             self.root.wm_attributes("-transparentcolor", TRANSPARENT)
@@ -269,60 +288,110 @@ class TingtingPet:
         self.canvas = __import__("tkinter").Canvas(self.root, bg=TRANSPARENT, highlightthickness=0, bd=0)
         self.canvas.pack(fill=BOTH, expand=True)
         self.canvas.configure(cursor="arrow")
-        cursor_image = Image.open(resource_path("assets/heart-cursor.png")).convert("RGBA")
-        cursor_image = cursor_image.resize((24, 24), Image.Resampling.LANCZOS)
-        self.heart_cursor_photo = ImageTk.PhotoImage(cursor_image)
-        self.heart_cursor_item = self.canvas.create_image(0, 0, image=self.heart_cursor_photo, anchor="s", state="hidden", tags="heart_cursor")
-        self.heart_cursor_active = False
         self._resize_window(keep_position=False)
-        self.canvas.bind("<Motion>", self._move_heart_cursor)
-        self.canvas.bind("<Leave>", lambda _event: self._hide_heart_cursor())
         self.canvas.bind("<ButtonPress-1>", self._on_press)
         self.canvas.bind("<B1-Motion>", self._on_drag)
         self.canvas.bind("<ButtonRelease-1>", self._on_release)
         self.canvas.bind("<Double-Button-1>", lambda _event: self.open_chat())
         self.canvas.bind("<Button-3>", self._show_context_menu)
-        self.root.after(80, self._cursor_watchdog)
+        self.root.after_idle(self._hide_from_taskbar)
 
-    def _move_heart_cursor(self, event) -> None:
-        self._update_heart_cursor(event.x, event.y)
+    @staticmethod
+    def _toolwindow_style(style: int) -> int:
+        return (style | 0x00000080) & ~0x00040000
 
-    def _cursor_over_character(self, x: int, y: int) -> bool:
-        if self.last_rendered_alpha is None or y < self.bubble_h:
-            return False
-        px, py = int(x), int(y - self.bubble_h)
-        if px < 0 or py < 0 or px >= self.last_rendered_alpha.width or py >= self.last_rendered_alpha.height:
-            return False
-        return self.last_rendered_alpha.getpixel((px, py)) >= 24
+    def _active_monitor_bounds(self) -> tuple[int, int, int, int]:
+        if sys.platform != "win32":
+            return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
 
-    def _update_heart_cursor(self, x: int, y: int) -> None:
-        if not self._cursor_over_character(x, y):
-            self._hide_heart_cursor()
+        class Point(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
+
+        class Rect(ctypes.Structure):
+            _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+        class MonitorInfo(ctypes.Structure):
+            _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", Rect), ("rcWork", Rect), ("dwFlags", ctypes.c_ulong)]
+
+        try:
+            user32 = ctypes.windll.user32
+            point = Point()
+            user32.GetCursorPos(ctypes.byref(point))
+            monitor_from_point = user32.MonitorFromPoint
+            monitor_from_point.argtypes = [Point, ctypes.c_uint]
+            monitor_from_point.restype = ctypes.c_void_p
+            monitor = monitor_from_point(point, 2)
+            info = MonitorInfo()
+            info.cbSize = ctypes.sizeof(MonitorInfo)
+            get_monitor_info = user32.GetMonitorInfoW
+            get_monitor_info.argtypes = [ctypes.c_void_p, ctypes.POINTER(MonitorInfo)]
+            get_monitor_info.restype = ctypes.c_int
+            if monitor and get_monitor_info(monitor, ctypes.byref(info)):
+                bounds = info.rcMonitor
+                return int(bounds.left), int(bounds.top), int(bounds.right), int(bounds.bottom)
+        except Exception:
+            pass
+        return 0, 0, self.root.winfo_screenwidth(), self.root.winfo_screenheight()
+
+    def _centered_window_position(self, width: int, height: int) -> tuple[int, int]:
+        left, top, right, bottom = self._active_monitor_bounds()
+        return left + (right - left - width) // 2, top + (bottom - top - height) // 2
+
+    def _main_window_handle(self) -> int:
+        if sys.platform != "win32":
+            return 0
+        self.root.update_idletasks()
+        child = int(self.root.winfo_id())
+        get_parent = ctypes.windll.user32.GetParent
+        get_parent.argtypes = [ctypes.c_void_p]
+        get_parent.restype = ctypes.c_void_p
+        parent = int(get_parent(child) or 0)
+        return parent or child
+
+    def _main_window_ex_style(self) -> int:
+        if sys.platform != "win32":
+            return 0
+        get_style = ctypes.windll.user32.GetWindowLongPtrW
+        get_style.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        get_style.restype = ctypes.c_ssize_t
+        return int(get_style(self._main_window_handle(), -20))
+
+    def _hide_from_taskbar(self) -> None:
+        if sys.platform != "win32" or not self.root.winfo_exists():
             return
-        self.canvas.coords(self.heart_cursor_item, x, y + 2)
-        self.canvas.itemconfigure(self.heart_cursor_item, state="normal")
-        self.canvas.tag_raise(self.heart_cursor_item)
-        if not self.heart_cursor_active:
-            self.canvas.configure(cursor="none")
-            self.heart_cursor_active = True
+        try:
+            hwnd = self._main_window_handle()
+            user32 = ctypes.windll.user32
+            get_style = user32.GetWindowLongPtrW
+            set_style = user32.SetWindowLongPtrW
+            get_style.argtypes = [ctypes.c_void_p, ctypes.c_int]
+            get_style.restype = ctypes.c_ssize_t
+            set_style.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_ssize_t]
+            set_style.restype = ctypes.c_ssize_t
+            style = int(get_style(hwnd, -20))
+            set_style(hwnd, -20, self._toolwindow_style(style))
+            set_window_pos = user32.SetWindowPos
+            set_window_pos.argtypes = [
+                ctypes.c_void_p,
+                ctypes.c_void_p,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_uint,
+            ]
+            set_window_pos.restype = ctypes.c_int
+            set_window_pos(hwnd, None, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0004 | 0x0010 | 0x0020)
+            self._taskbar_window_handle = hwnd
+        except Exception:
+            pass
 
-    def _hide_heart_cursor(self) -> None:
-        if hasattr(self, "heart_cursor_item"):
-            self.canvas.itemconfigure(self.heart_cursor_item, state="hidden")
-        if getattr(self, "heart_cursor_active", False):
-            self.canvas.configure(cursor="arrow")
-            self.heart_cursor_active = False
-
-    def _cursor_watchdog(self) -> None:
-        if not self.root.winfo_exists():
-            return
-        pointer_x, pointer_y = self.root.winfo_pointerxy()
-        x, y = pointer_x - self.root.winfo_rootx(), pointer_y - self.root.winfo_rooty()
-        if 0 <= x < self.window_w and 0 <= y < self.window_h:
-            self._update_heart_cursor(x, y)
-        else:
-            self._hide_heart_cursor()
-        self.root.after(80, self._cursor_watchdog)
+    def _reveal_pet_window(self) -> None:
+        self.root.deiconify()
+        self.root.update_idletasks()
+        self._hide_from_taskbar()
+        self.root.lift()
+        self.root.after(80, self._hide_from_taskbar)
 
     def _resize_window(self, keep_position: bool = True) -> None:
         width = max(120, int(CELL_W * self.scale))
@@ -385,7 +454,7 @@ class TingtingPet:
         panel.overrideredirect(True)
         panel.attributes("-topmost", True)
         panel.configure(bg="#4d1f2e")
-        width, height = 320, 490
+        width, height = 320, 570
         x = x if x is not None else self.root.winfo_x() - width
         y = y if y is not None else self.root.winfo_y()
         screen_w, screen_h = panel.winfo_screenwidth(), panel.winfo_screenheight()
@@ -393,16 +462,16 @@ class TingtingPet:
         panel.geometry(f"{width}x{height}+{x}+{y}")
         shell = tk.Frame(panel, bg="#fffaf7", highlightbackground="#9b3e55", highlightthickness=2)
         shell.pack(fill=BOTH, expand=True, padx=2, pady=2)
-        header = tk.Frame(shell, bg="#6f2c42", height=82)
+        header = tk.Frame(shell, bg="#6f2c42", height=94)
         header.pack(fill="x")
         header.pack_propagate(False)
-        tk.Label(header, text=self.t("婷婷"), font=("Microsoft YaHei UI", 20, "bold"), fg="white", bg="#6f2c42").pack(anchor="w", padx=18, pady=(13, 0))
+        tk.Label(header, text=self.t("婷婷"), font=("Microsoft YaHei UI", 20, "bold"), fg="white", bg="#6f2c42").pack(anchor="w", padx=18, pady=(11, 0))
         self.panel_status = tk.Label(
             header,
-            text=f"🪙 {int(self.state['coins'])}   🍚 {int(self.state['hunger'])}%   💗 {int(self.state['mood'])}%",
-            font=("Microsoft YaHei UI", 10), fg="#f8dce5", bg="#6f2c42",
+            text=f"🍚 {int(self.state['hunger'])}%   💗 {int(self.state['mood'])}%   ⚡ {int(self.state['energy'])}%",
+            font=("Segoe UI Emoji", 10), fg="#f8dce5", bg="#6f2c42",
         )
-        self.panel_status.pack(anchor="w", padx=18, pady=(2, 8))
+        self.panel_status.pack(anchor="w", padx=18, pady=(4, 12))
         grid = tk.Frame(shell, bg="#fffaf7")
         grid.pack(fill=BOTH, expand=True, padx=12, pady=12)
         buttons = [
@@ -432,7 +501,7 @@ class TingtingPet:
         footer = tk.Frame(shell, bg="#fffaf7")
         footer.pack(fill="x", padx=12, pady=(0, 12))
         tk.Button(footer, text=self.t("暂时隐藏"), command=lambda: self._panel_command(self.hide_pet), relief="flat", bg="#eee7e9", cursor="hand2").pack(side=LEFT, fill="x", expand=True, padx=(0, 5))
-        tk.Button(footer, text=self.t("退出"), command=lambda: self._panel_command(self.quit), relief="flat", bg="#f2d6dc", fg="#8a263e", cursor="hand2").pack(side=RIGHT, fill="x", expand=True, padx=(5, 0))
+        tk.Button(footer, text=self.bi("退出程序", "Quit"), command=lambda: self._panel_command(self.quit), relief="flat", bg="#f2d6dc", fg="#8a263e", cursor="hand2").pack(side=RIGHT, fill="x", expand=True, padx=(5, 0))
         panel.bind("<FocusOut>", lambda _event: panel.after(120, lambda: panel.destroy() if panel.winfo_exists() and panel.focus_get() is None else None))
         panel.focus_force()
 
@@ -563,6 +632,8 @@ class TingtingPet:
         parts[part] = int(parts.get(part, 0)) + 1
         self._record_interaction_time()
         self.state["mood"] = min(100, int(self.state.get("mood", 80)) + 1)
+        self.click_light_started = time.monotonic()
+        self.click_light_point = (float(px), float(py))
         self.start_action(action, line)
         self.save()
         self.check_achievements()
@@ -583,6 +654,7 @@ class TingtingPet:
             self.sleep_mode = False
         self.action_started = time.monotonic()
         self.frame_cursor = 0
+        self.last_frame_time = 0.0
         self.last_activity = self.action_started
         actions = set(self.state.get("actions_seen", []))
         actions.add(name)
@@ -609,7 +681,8 @@ class TingtingPet:
             spec = LOGICAL_ACTIONS["idle"]
             elapsed = 0
         frame_interval = self._frame_interval(self.current_action)
-        if now - self.last_frame_time >= frame_interval:
+        frame_due = now - self.last_frame_time >= frame_interval
+        if frame_due:
             self.last_frame_time = now
             row_name = str(spec["row"])
             if spec.get("effect") == "walk":
@@ -621,14 +694,21 @@ class TingtingPet:
             else:
                 frame = row_frames[self.frame_cursor % len(row_frames)]
             self.frame_cursor += 1
-            self._render_frame(frame, str(spec.get("effect", "")), elapsed)
+            self.last_render_source = frame
+            self.last_render_effect = str(spec.get("effect", ""))
+        click_light_active = self.click_light_point is not None and now - self.click_light_started < 0.72
+        click_light_due = click_light_active and now - self.last_click_light_render >= 1 / 30
+        if (frame_due or click_light_due) and self.last_render_source is not None:
+            if click_light_due:
+                self.last_click_light_render = now
+            self._render_frame(self.last_render_source, self.last_render_effect, elapsed)
         if now >= self.next_random_action and self.current_action == "idle" and not self.sleep_mode:
             action = random.choice(["wave", "think", "sleepy", "shy", "dance", "review", "walk"])
             self.state["flags"]["random_actions"] = int(self.state["flags"].get("random_actions", 0)) + 1
             lines = ["I'm always here with you.", "Take a break when work gets tiring.", "Want to see a new action?", "Have you taken good care of yourself today?"] if self.is_english else ["我一直在这里陪着你。", "忙累了就休息一下吧。", "要不要看看我新学的动作？", "今天也有好好照顾自己吗？"]
             self.start_action(action, random.choice(lines))
             self.next_random_action = now + random.uniform(35, 75)
-        self.root.after(40, self._tick_animation)
+        self.root.after(16 if click_light_active else 40, self._tick_animation)
 
     @staticmethod
     def _frame_interval(action: str) -> float:
@@ -670,6 +750,7 @@ class TingtingPet:
             canvas.alpha_composite(enlarged, ((target_w - enlarged.width) // 2, target_h - enlarged.height))
             image = canvas
         image = self._decorate_effect(image, effect, phase)
+        image = self._apply_click_light(image)
         # Tk's Windows color-key transparency cannot render semi-transparent edges.
         # Snap alpha to binary so those pixels do not blend against the dark key color.
         image.putalpha(image.getchannel("A").point(lambda value: 255 if value >= 176 else 0))
@@ -682,6 +763,62 @@ class TingtingPet:
             self.canvas.itemconfigure(self.sprite_item, image=self.photo)
             self.canvas.coords(self.sprite_item, target_w // 2 + offset_x, self.bubble_h + target_h + offset_y)
         self.canvas.tag_lower("sprite")
+
+    @staticmethod
+    def _compose_click_light(image: Image.Image, point: tuple[float, float], progress: float) -> Image.Image:
+        progress = max(0.0, min(1.0, float(progress)))
+        if progress >= 1.0:
+            return image
+        x = max(0, min(image.width - 1, int(point[0])))
+        y = max(0, min(image.height - 1, int(point[1])))
+        fade = 1.0 - progress
+        radius = max(8, int((9 + 32 * progress) * max(0.75, image.width / 192)))
+        stroke = max(2, int(3 * max(0.75, image.width / 192)))
+        overlay = Image.new("RGBA", image.size, (0, 0, 0, 0))
+        draw = ImageDraw.Draw(overlay, "RGBA")
+        ray_alpha = int(235 * fade)
+        ray_inner = max(3, int(radius * 0.28))
+        for dx, dy in ((-1, -1), (1, -1), (-1, 1), (1, 1)):
+            draw.line(
+                (x + dx * ray_inner, y + dy * ray_inner, x + dx * radius, y + dy * radius),
+                fill=(255, 224, 130, ray_alpha),
+                width=stroke,
+            )
+        heart_radius = max(6, int(radius * 0.62))
+        heart_points = []
+        for index in range(33):
+            angle = math.tau * index / 32
+            hx = 16 * math.sin(angle) ** 3
+            hy = -(13 * math.cos(angle) - 5 * math.cos(2 * angle) - 2 * math.cos(3 * angle) - math.cos(4 * angle))
+            heart_points.append((x + int(hx * heart_radius / 18), y + int(hy * heart_radius / 18)))
+        draw.line(heart_points + [heart_points[0]], fill=(244, 91, 139, int(245 * fade)), width=stroke, joint="curve")
+        core = max(3, int(5 * fade * max(0.75, image.width / 192)))
+        draw.polygon(
+            ((x, y - core), (x + core, y), (x, y + core), (x - core, y)),
+            fill=(255, 232, 150, int(245 * fade)),
+        )
+        sparkle = max(3, int(7 * fade * max(0.75, image.width / 192)))
+        for dx, dy in ((-radius // 2, -radius // 4), (radius // 2, -radius // 3), (radius // 3, radius // 2)):
+            sx, sy = x + dx, y + dy
+            draw.polygon(
+                ((sx, sy - sparkle), (sx + sparkle // 3, sy), (sx, sy + sparkle), (sx - sparkle // 3, sy)),
+                fill=(255, 247, 196, int(245 * fade)),
+            )
+        original_alpha = image.getchannel("A")
+        clipped_alpha = ImageChops.multiply(overlay.getchannel("A"), original_alpha)
+        overlay.putalpha(clipped_alpha)
+        return Image.alpha_composite(image, overlay)
+
+    def _apply_click_light(self, image: Image.Image) -> Image.Image:
+        if self.click_light_point is None or self.click_light_started <= 0:
+            return image
+        elapsed = time.monotonic() - self.click_light_started
+        duration = 0.72
+        if elapsed >= duration:
+            self.click_light_started = 0.0
+            self.click_light_point = None
+            return image
+        return self._compose_click_light(image, self.click_light_point, elapsed / duration)
 
     def _decorate_effect(self, image: Image.Image, effect: str, phase: float) -> Image.Image:
         if effect not in {"smile", "blush", "face_surprise", "think", "work", "review", "sparkle", "hearts", "recover", "guard", "dance", "sleepy", "desk_sleep"}:
@@ -823,7 +960,7 @@ class TingtingPet:
         inner_width = max(72, self.window_w - 40)
         wrapped = self._wrap_bubble_text(text, font, inner_width)
         line_count = max(1, len(wrapped.splitlines()))
-        required_height = 38 + line_count * font.metrics("linespace")
+        required_height = 52 + line_count * font.metrics("linespace")
         self._set_bubble_height(required_height)
         margin = max(4, int(6 * self.scale))
         y1, y2 = 3, self.bubble_h - 14
@@ -835,8 +972,8 @@ class TingtingPet:
             fill="#fffaf5", outline="#9b3e55", width=2, smooth=True, tags="bubble",
         )
         self.canvas.create_text(
-            self.window_w // 2, (y1 + y2) // 2 + 4, text=wrapped, width=inner_width,
-            fill="#542637", font=font, justify="center", tags="bubble",
+            self.window_w // 2, y1 + 20, text=wrapped, width=inner_width,
+            fill="#542637", font=font, justify="center", anchor="n", tags="bubble",
         )
         if self.bubble_after:
             self.root.after_cancel(self.bubble_after)
@@ -1003,13 +1140,14 @@ class TingtingPet:
         scrollbar = ttk.Scrollbar(parent, orient=VERTICAL, command=canvas.yview)
         content = ttk.Frame(canvas, padding=6, style="Card.TFrame")
         content.bind("<Configure>", lambda _event: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.create_window((0, 0), window=content, anchor="nw")
+        content_window = canvas.create_window((0, 0), window=content, anchor="nw")
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(content_window, width=max(1, event.width)))
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.pack(side=LEFT, fill=BOTH, expand=True)
         scrollbar.pack(side=RIGHT, fill="y")
         self._register_scroll_canvas(scroll_window, canvas)
         for col in range(2):
-            content.columnconfigure(col, weight=1, minsize=350)
+            content.columnconfigure(col, weight=1, uniform="catalog")
         for index, item in enumerate(items):
             card = tk.Frame(content, bg="#f9eef1", highlightbackground="#ead6dc", highlightthickness=1)
             card.grid(row=index // 2, column=index % 2, sticky="nsew", padx=6, pady=6)
@@ -1495,7 +1633,7 @@ class TingtingPet:
         tk.Label(header, text=self.t("婷婷使用说明"), font=("Microsoft YaHei UI", 19, "bold"), fg="white", bg="#6f2c42").pack(anchor="w")
         tk.Label(header, text=self.t("陪伴、互动与隐私设置指南"), font=("Microsoft YaHei UI", 9), fg="#f5cad6", bg="#6f2c42").pack(anchor="w", pady=(3, 0))
         sections = [
-            ("💗", "和婷婷互动", "点击头发、脸、胸部、手臂或裙子，会触发不同回应。左键拖动可移动，双击打开聊天，右键打开功能中心。鼠标停在人物上时会变成爱心。"),
+            ("💗", "和婷婷互动", "点击头发、脸、胸部、手臂或裙子，会触发不同回应和粉金光效。左键拖动可移动，双击打开聊天，右键打开功能中心。"),
             ("🍱", "照顾与赠礼", "在商店购买食物、礼物和恢复品，再从背包使用。空心菜、白灼虾和牛肉都已收录；长期不进食会降低状态。"),
             ("🌙", "挂机与休息", "陪伴期间会持续获得金币。超过 5 分钟没有触摸，婷婷会在电脑桌前犯困睡觉；再次点击即可唤醒。"),
             ("💬", "AI 对话", "在设置中填写 OpenAI 兼容 API 地址、模型和 API Key，即可启用 AI 对话。未配置时仍可使用本地陪伴模式。"),
@@ -1504,7 +1642,7 @@ class TingtingPet:
         ]
         if self.is_english:
             sections = [
-                ("💗", "Interact with Tingting", "Touch her hair, face, chest, arms or skirt for different responses. Drag to move, double-click to chat, and right-click for the control center. The pointer becomes a heart over Tingting."),
+                ("💗", "Interact with Tingting", "Touch her hair, face, chest, arms or skirt for different responses and a pink-and-gold light effect. Drag to move, double-click to chat, and right-click for the control center."),
                 ("🍱", "Care & Gifts", "Buy food, gifts and recovery items in the shop, then use them from inventory. Garlic water spinach, poached shrimp and beef are included. Going too long without food lowers her condition."),
                 ("🌙", "Idle & Rest", "You earn coins while Tingting stays with you. After five minutes without a touch, she naps at her computer. Touch her again to wake her."),
                 ("💬", "AI Chat", "Configure an OpenAI-compatible endpoint, model and API Key in Settings. Local companion replies remain available without AI."),
@@ -1578,8 +1716,7 @@ class TingtingPet:
         self.root.withdraw()
 
     def show_pet(self) -> None:
-        self.root.deiconify()
-        self.root.lift()
+        self._reveal_pet_window()
         self.start_action("wave", self.bi("我回来啦！", "I'm back!"))
 
     def quit(self) -> None:

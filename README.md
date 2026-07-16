@@ -11,7 +11,6 @@
 <p align="center">
   <a href="README.zh-CN.md">简体中文</a> ·
   <a href="#download">Download</a> ·
-  <a href="#privacy-and-local-data">Privacy</a> ·
   <a href="#license">License</a>
 </p>
 
@@ -27,12 +26,12 @@
 - Companion-time, idle-time, touch, chat, feeding, gift, coin, and preference statistics.
 - Optional OpenAI-compatible AI chat configured from the settings screen.
 - Simplified Chinese and English interfaces.
-- Adjustable character size and a custom heart-shaped pointer.
+- Adjustable character size and a smooth pink-and-gold click-light effect.
 - Installer upgrades preserve local game data.
 
 ## Download
 
-Download the latest Windows installer from the repository's **Releases** page.
+Download the latest Windows installer or portable executable from the repository's **Releases** page.
 
 The installer supports in-place upgrades. Save data is stored separately in:
 
@@ -56,45 +55,10 @@ Open **Settings** and enter an API base URL, model name, and API key. The applic
 
 The API key is never bundled into shared builds. On Windows it is stored locally using DPAPI encryption tied to the current user account. Without an API key, the chat window still offers a small set of offline responses.
 
-## Privacy and local data
-
-All game progress is stored locally. The build process rejects packaged `state.json` files and API-key-like source strings to reduce the risk of accidentally publishing personal data.
-
-Before sharing a build, use the files produced in `release/`; do not copy your `%APPDATA%\TingtingDesktopPet` directory.
-
-## Build from source
-
-Requirements:
-
-- Windows 10 or later
-- Python 3.12+
-- PowerShell
-- Inno Setup 6 for the installer
-
-Build the portable executable:
-
-```powershell
-.\build.ps1
-```
-
-Build the installer:
-
-```powershell
-.\build-installer.ps1 -Version 1.4.0
-```
-
-Run tests:
-
-```powershell
-python -m unittest discover -s tests -p "test_core.py"
-python tests\gui_smoke.py
-python tests\startup_splash_smoke.py
-```
-
 ## License
 
 The source code is licensed under the [MIT License](LICENSE).
 
 The Tingting character likeness, sprite sheet, portraits, icons, and other character artwork are **not** covered by the MIT License. They are provided under the separate [Character Assets License](ASSETS_LICENSE.md), which permits personal, non-commercial use with this project but prohibits unauthorized commercial use or standalone redistribution.
 
-This split keeps the code easy to study and reuse while protecting the personal character identity and artwork.
+Source code and character artwork are licensed separately. Please review both license files before using or redistributing this project.

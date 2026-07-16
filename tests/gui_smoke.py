@@ -15,26 +15,65 @@ def run() -> None:
         from tingting_pet.app import TingtingPet
 
         app = TingtingPet()
+        assert not hasattr(app, "heart_cursor_handle"), "custom cursor runtime must remain disabled"
+        assert app.canvas.cget("cursor") == "arrow"
+        ex_style = app._main_window_ex_style()
+        assert ex_style & 0x00000080, "pet window is not marked as a tool window"
+        assert not ex_style & 0x00040000, "pet window still has the taskbar app-window style"
         app.state["coins"] = 2000
         bbox = app.last_rendered_alpha.getbbox()
         assert bbox is not None
-        visible_point = next(
-            (x, y)
-            for y in range(bbox[1], bbox[3])
-            for x in range(bbox[0], bbox[2])
-            if app.last_rendered_alpha.getpixel((x, y)) >= 24
+        center_x, center_y = (bbox[0] + bbox[2]) // 2, (bbox[1] + bbox[3]) // 2
+        visible_point = min(
+            (
+                (x, y)
+                for y in range(bbox[1], bbox[3])
+                for x in range(bbox[0], bbox[2])
+                if app.last_rendered_alpha.getpixel((x, y)) >= 24
+            ),
+            key=lambda point: (point[0] - center_x) ** 2 + (point[1] - center_y) ** 2,
         )
-        app._update_heart_cursor(visible_point[0], app.bubble_h + visible_point[1])
-        assert app.heart_cursor_active and app.canvas.cget("cursor") == "none"
-        app._update_heart_cursor(0, 0)
-        assert not app.heart_cursor_active and app.canvas.cget("cursor") == "arrow"
+        app.handle_part_click(*visible_point)
+        assert app.click_light_point == (float(visible_point[0]), float(visible_point[1]))
+        assert app.click_light_started > 0
+        app.say("保持一点礼貌距离，\n我们还是好朋友。\n谢谢你的理解。")
+
+        def verify_bubble_layout() -> None:
+            items = app.canvas.find_withtag("bubble")
+            text_item = next(item for item in items if app.canvas.type(item) == "text")
+            shape_item = next(item for item in items if app.canvas.type(item) == "polygon")
+            text_box = app.canvas.bbox(text_item)
+            shape_box = app.canvas.bbox(shape_item)
+            assert text_box[1] >= shape_box[1] + 6, "bubble text overlaps the top border"
+            assert text_box[3] <= shape_box[3] - 8, "bubble text overlaps the bottom/tail"
+
         app.root.after(300, lambda: app.open_quick_panel(40, 40))
+
+        def verify_quick_panel() -> None:
+            panel = app.quick_panel
+            panel.update()
+            panel_status = app.panel_status.cget("text")
+            assert "🪙" not in panel_status and str(app.state["coins"]) not in panel_status, "quick-panel status still shows coins"
+            assert all(str(int(app.state[key])) in panel_status for key in ("hunger", "mood", "energy")), "quick-panel status is missing a care value"
+            status_bottom = app.panel_status.winfo_y() + app.panel_status.winfo_height()
+            assert status_bottom <= app.panel_status.master.winfo_height(), "quick-panel status is clipped"
+            footer = panel.winfo_children()[0].winfo_children()[-1]
+            assert footer.winfo_height() >= 28, "quick-panel footer is clipped"
+            assert footer.winfo_y() + footer.winfo_height() <= panel.winfo_height(), "quick-panel footer is outside the window"
+            button_texts = [widget.cget("text") for widget in footer.winfo_children()]
+            assert app.bi("退出程序", "Quit") in button_texts, "quick-panel quit button is missing"
+
+        app.root.after(150, verify_bubble_layout)
+        app.root.after(500, verify_quick_panel)
         app.root.after(700, app.open_store)
 
         def verify_store_wheel() -> None:
             window = app.dialogs["store"]
             window.update()
             canvas = next(item for item in window._wheel_canvases if item.winfo_ismapped())
+            canvas.update_idletasks()
+            content_bounds = canvas.bbox("all")
+            assert content_bounds is not None and content_bounds[2] >= canvas.winfo_width() - 3, "store catalog does not fill the canvas width"
             before = canvas.yview()
             rootx, rooty = canvas.winfo_rootx() + 20, canvas.winfo_rooty() + 20
             x, y = rootx - window.winfo_rootx(), rooty - window.winfo_rooty()

@@ -23,6 +23,12 @@ with tempfile.TemporaryDirectory(prefix="tingting-splash-") as temp:
     def capture() -> None:
         splash = app.startup_splash
         x, y = splash.winfo_x(), splash.winfo_y()
+        left, top, right, bottom = app._active_monitor_bounds()
+        expected_x = left + (right - left - splash.winfo_width()) // 2
+        expected_y = top + (bottom - top - splash.winfo_height()) // 2
+        assert abs(x - expected_x) <= 1 and abs(y - expected_y) <= 1, (
+            f"splash is not centered: actual=({x}, {y}), expected=({expected_x}, {expected_y})"
+        )
         ImageGrab.grab(bbox=(x - 12, y - 12, x + splash.winfo_width() + 12, y + splash.winfo_height() + 12), all_screens=True).save(ROOT / "qa" / "startup-splash.png")
 
     def verify() -> None:

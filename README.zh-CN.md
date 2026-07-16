@@ -11,7 +11,6 @@
 <p align="center">
   <a href="README.md">English</a> ·
   <a href="#下载安装">下载安装</a> ·
-  <a href="#隐私与本地数据">隐私说明</a> ·
   <a href="#开源协议">开源协议</a>
 </p>
 
@@ -27,12 +26,12 @@
 - 记录陪伴、挂机、触摸、聊天、喂食、送礼、金币及互动偏好。
 - 可在设置中配置 OpenAI 兼容接口，实现 AI 对话。
 - 默认简体中文，可切换英文。
-- 支持实时调整人物大小，并提供专属爱心鼠标。
+- 支持实时调整人物大小，并提供流畅的粉金点击光效。
 - 使用安装版覆盖升级时会保留原有游戏数据。
 
 ## 下载安装
 
-请前往本仓库的 **Releases** 页面下载最新 Windows 安装包。
+请前往本仓库的 **Releases** 页面下载最新 Windows 安装版或便携版。
 
 安装包支持直接覆盖升级。游戏数据独立保存在：
 
@@ -56,45 +55,10 @@
 
 API Key 不会被打包进分享文件，在 Windows 中会通过当前用户的 DPAPI 加密后保存到本机。未配置 API Key 时，聊天窗口仍提供少量本地陪伴回复。
 
-## 隐私与本地数据
-
-全部游戏进度都只保存在本机。构建脚本会检查 `state.json` 和疑似 API Key 的内容，降低意外公开个人存档或密钥的风险。
-
-分享时请使用 `release` 目录生成的发布文件，不要复制 `%APPDATA%\TingtingDesktopPet` 数据目录。
-
-## 从源码构建
-
-环境要求：
-
-- Windows 10 或更高版本
-- Python 3.12+
-- PowerShell
-- 制作安装包时需要 Inno Setup 6
-
-构建便携版：
-
-```powershell
-.\build.ps1
-```
-
-构建安装版：
-
-```powershell
-.\build-installer.ps1 -Version 1.4.0
-```
-
-运行测试：
-
-```powershell
-python -m unittest discover -s tests -p "test_core.py"
-python tests\gui_smoke.py
-python tests\startup_splash_smoke.py
-```
-
 ## 开源协议
 
 程序源代码采用 [MIT License](LICENSE)。
 
 婷婷的人物肖像、精灵图、头像、图标及其他角色美术素材不属于 MIT 授权范围，单独适用[人物素材授权说明](ASSETS_LICENSE.md)：允许结合本项目进行个人、非商业使用，但不允许未经授权的商业使用或将人物素材单独转载、出售。
 
-这种双层授权方式既方便其他人学习和改进代码，也能保护婷婷的个人形象和角色素材。
+源代码与人物美术素材分别适用不同授权；使用或再分发本项目之前，请同时阅读两份授权文件。

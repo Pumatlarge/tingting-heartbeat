@@ -4,7 +4,6 @@ import os
 import sys
 import tempfile
 from pathlib import Path
-from types import SimpleNamespace
 
 from PIL import ImageGrab
 
@@ -68,11 +67,10 @@ with tempfile.TemporaryDirectory(prefix="tingting-capture-") as temp:
             help_window.destroy()
         app.root.geometry("+260+180")
         app.start_action("guard", "这里不可以随便碰啦，请尊重一点。")
-        app._move_heart_cursor(SimpleNamespace(x=app.window_w // 2, y=app.bubble_h + app.sprite_h // 2))
 
     def capture_touch() -> None:
         x, y = app.root.winfo_x(), app.root.winfo_y()
-        ImageGrab.grab(bbox=(x - 20, y - 20, x + app.window_w + 20, y + app.window_h + 20), all_screens=True).save(ROOT / "qa" / "heart-cursor-fixed.png")
+        ImageGrab.grab(bbox=(x - 20, y - 20, x + app.window_w + 20, y + app.window_h + 20), all_screens=True).save(ROOT / "qa" / "touch-reaction.png")
         app.start_action("desk_sleep", "我在电脑桌前眯一会儿，你回来时轻轻叫醒我吧。")
         app.root.after(2000, capture_pet)
 

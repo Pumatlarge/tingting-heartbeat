@@ -42,14 +42,39 @@ with tempfile.TemporaryDirectory(prefix="tingting-cursor-") as temp:
             ((x, y) for y in range(bbox[1], bbox[3]) for x in range(bbox[0], bbox[2]) if alpha.getpixel((x, y)) >= 24),
             key=lambda point: (point[0] - cx) ** 2 + (point[1] - cy) ** 2,
         )
-        user32.SetCursorPos(app.root.winfo_rootx() + visible[0], app.root.winfo_rooty() + app.bubble_h + visible[1])
-        pump(app, 0.3)
-        assert app.heart_cursor_active
-        user32.SetCursorPos(app.root.winfo_rootx() - 40, app.root.winfo_rooty() - 40)
-        pump(app, 0.3)
-        assert not app.heart_cursor_active
+        root_x, root_y = app.root.winfo_rootx(), app.root.winfo_rooty()
+        character_target = (root_x + visible[0], root_y + app.bubble_h + visible[1])
+        user32.SetCursorPos(*character_target)
+        pump(app, 0.5)
+        actual = Point()
+        user32.GetCursorPos(ctypes.byref(actual))
+        assert abs(actual.x - character_target[0]) <= 2 and abs(actual.y - character_target[1]) <= 2, (
+            f"pointer moved while approaching the character: target={character_target}, actual=({actual.x}, {actual.y})"
+        )
+        assert not hasattr(app, "heart_cursor_handle"), "custom cursor runtime is still active"
         assert app.canvas.cget("cursor") == "arrow"
-        print("CURSOR_TRANSITION_OK")
+
+        exits = {
+            "left": (root_x - 50, root_y + app.bubble_h + visible[1]),
+            "right": (root_x + app.window_w + 50, root_y + app.bubble_h + visible[1]),
+            "top": (root_x + visible[0], root_y - 50),
+            "bottom": (root_x + visible[0], root_y + app.window_h + 50),
+        }
+        for direction, target in exits.items():
+            user32.SetCursorPos(*character_target)
+            pump(app, 0.25)
+            actual = Point()
+            user32.GetCursorPos(ctypes.byref(actual))
+            assert abs(actual.x - character_target[0]) <= 2 and abs(actual.y - character_target[1]) <= 2, f"pointer drifted before {direction} exit"
+            user32.SetCursorPos(*target)
+            pump(app, 0.5)
+            actual = Point()
+            user32.GetCursorPos(ctypes.byref(actual))
+            assert abs(actual.x - target[0]) <= 2 and abs(actual.y - target[1]) <= 2, (
+                f"pointer moved unexpectedly after {direction} exit: target={target}, actual=({actual.x}, {actual.y})"
+            )
+            assert app.canvas.cget("cursor") == "arrow"
+        print("CURSOR_STABILITY_OK")
     finally:
         user32.SetCursorPos(original.x, original.y)
         app.quit()

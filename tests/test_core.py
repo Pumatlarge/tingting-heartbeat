@@ -61,14 +61,16 @@ class CoreTests(unittest.TestCase):
         self.assertGreater(len(wrapped.splitlines()), 1)
         self.assertTrue(all(len(line) <= 7 for line in wrapped.splitlines()))
 
-    def test_heart_cursor_only_activates_on_visible_character_pixels(self) -> None:
-        pet = TingtingPet.__new__(TingtingPet)
-        pet.bubble_h = 80
-        pet.last_rendered_alpha = Image.new("L", (20, 30), 0)
-        pet.last_rendered_alpha.putpixel((10, 12), 255)
-        self.assertTrue(pet._cursor_over_character(10, 92))
-        self.assertFalse(pet._cursor_over_character(9, 92))
-        self.assertFalse(pet._cursor_over_character(10, 79))
+    def test_click_light_is_clipped_to_character_alpha(self) -> None:
+        image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+        for y in range(18, 47):
+            for x in range(20, 45):
+                image.putpixel((x, y), (120, 40, 60, 255))
+        before = image.copy()
+        result = TingtingPet._compose_click_light(image, (32, 32), 0.25)
+        self.assertEqual(result.getchannel("A").tobytes(), before.getchannel("A").tobytes())
+        self.assertEqual(result.getpixel((5, 5)), (0, 0, 0, 0))
+        self.assertNotEqual(result.getpixel((32, 32)), before.getpixel((32, 32)))
 
     def test_achievement_reward_can_only_be_claimed_once(self) -> None:
         pet = self.make_pet()
