@@ -1,5 +1,23 @@
 # 心动婷婷更新记录 / Tingting Heartbeat Changelog
 
+## v1.4.2
+
+- 修复双屏或多屏环境下右键功能中心超出当前显示器、底部按钮显示不全的问题。
+- 功能中心会根据当前显示器工作区和实际控件高度自适应，并优先保留顶部状态及底部“暂时隐藏/退出程序”按钮。
+- 修复高 DPI 或 Windows 显示缩放环境下功能中心标题、状态栏和按钮被固定尺寸裁切的问题。
+- 人物拖动到不同 DPI 的显示器并松开后，会按显示器缩放比例自动调整大小，同时保留设置中的用户大小比例。
+- 支持位于主屏幕左侧或上方的负坐标显示器，启动动画、人物、气泡、行走和功能中心均可正确定位。
+- 缩小对话气泡字体并限制最大字号，改善较小人物尺寸及多行台词的可读性。
+
+### English
+
+- Fixed the quick panel extending beyond the active monitor or clipping its footer in multi-monitor setups.
+- The quick panel now adapts to the monitor work area and actual widget size while keeping its status header and Hide/Quit controls visible.
+- Fixed fixed-size clipping of quick-panel titles, status values, and buttons under high-DPI Windows display scaling.
+- The character now rescales proportionally after being dropped on a monitor with a different DPI while preserving the user-selected size setting.
+- Added correct negative-coordinate support for monitors positioned left of or above the primary display.
+- Reduced and capped speech-bubble font sizes for clearer multiline dialogue at smaller character sizes.
+
 ## v1.4.1
 
 - 桌面人物窗口不再显示在 Windows 任务栏，可通过系统托盘或右键功能中心退出程序。
