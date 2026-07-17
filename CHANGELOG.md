@@ -1,5 +1,13 @@
 # 心动婷婷更新记录 / Tingting Heartbeat Changelog
 
+## v1.5.1
+
+- 设置页面现在会显示当前程序版本号，方便确认已安装版本。
+
+### English
+
+- The Settings page now shows the current app version for quick installed-version checks.
+
 ## v1.5.0
 
 - AI 对话会自动保存在本机，关闭聊天窗口后不再丢失。

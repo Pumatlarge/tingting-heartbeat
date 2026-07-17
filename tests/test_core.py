@@ -5,6 +5,7 @@ import unittest
 
 from PIL import Image
 
+from tingting_pet import __version__
 from tingting_pet.app import TingtingPet, resource_path
 from tingting_pet.catalog import ACHIEVEMENTS, FOOD_BY_NAME, GIFT_BY_NAME, LOGICAL_ACTIONS, RECOVERY_BY_NAME
 from tingting_pet.storage import default_state, protect_secret, unprotect_secret
@@ -47,6 +48,7 @@ class CoreTests(unittest.TestCase):
         self.assertGreater(TingtingPet._frame_interval("desk_sleep"), TingtingPet._frame_interval("idle") * 10)
 
     def test_english_language_defaults_and_catalog_coverage(self) -> None:
+        self.assertRegex(__version__, r"^\d+\.\d+\.\d+$")
         self.assertEqual(default_state()["settings"]["language"], "zh-CN")
         self.assertEqual(text("设置", "en"), "Settings")
         self.assertEqual(len(ACHIEVEMENT_TEXT), len(ACHIEVEMENTS))
