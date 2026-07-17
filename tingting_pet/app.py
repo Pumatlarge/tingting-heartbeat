@@ -22,6 +22,7 @@ from tkinter import messagebox, ttk
 
 from PIL import Image, ImageChops, ImageDraw, ImageTk
 
+from . import __version__
 from .catalog import (
     ACHIEVEMENTS,
     FOOD_BY_NAME,
@@ -1967,6 +1968,8 @@ class TingtingPet:
 
         actions = ttk.Frame(frame)
         actions.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(20, 0))
+        version_text = self.bi(f"版本 {__version__}", f"Version {__version__}")
+        ttk.Label(actions, text=version_text, foreground="#806a72").pack(side=LEFT, padx=(0, 14))
         ttk.Button(actions, text=self.t("清除 API Key"), command=lambda: self._clear_api_key(window)).pack(side=LEFT)
         ttk.Button(actions, text=self.t("重置所有参数"), command=lambda: self.reset_all_data(window)).pack(side=LEFT, padx=8)
         ttk.Button(actions, text=self.t("保存设置"), style="Accent.TButton", command=save_settings).pack(side=RIGHT)
