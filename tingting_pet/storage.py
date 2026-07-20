@@ -71,6 +71,7 @@ def default_state() -> dict:
             "api_model": "gpt-4.1-mini",
             "api_key_protected": "",
             "web_search_enabled": False,
+            "auto_check_updates": True,
         },
     }
 

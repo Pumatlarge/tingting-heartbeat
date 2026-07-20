@@ -2,6 +2,10 @@ $ErrorActionPreference = 'Stop'
 $Project = Split-Path -Parent $MyInvocation.MyCommand.Path
 $BundledPython = 'C:\Users\jiang\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
 $Python = if (Test-Path -LiteralPath $BundledPython) { $BundledPython } else { (Get-Command python).Source }
+$BuildToken = [guid]::NewGuid().ToString('N')
+$TempBuildRoot = Join-Path $env:LOCALAPPDATA "TingtingHeartbeat\PyInstaller\$BuildToken"
+$WorkPath = Join-Path $TempBuildRoot 'work'
+$DistPath = Join-Path $TempBuildRoot 'dist'
 
 Push-Location $Project
 try {
@@ -14,16 +18,25 @@ try {
     if ($PackagedState) { throw "Share safety check failed: state.json must never be packaged." }
     & $Python -m pip install --disable-pip-version-check -r requirements.txt
     & $Python make_icon.py
+    New-Item -ItemType Directory -Path $WorkPath, $DistPath -Force | Out-Null
     & $Python -m PyInstaller --noconfirm --clean --onefile --windowed `
         --name 'TingtingHeartbeat' `
         --icon 'assets\tingting.ico' `
         --add-data 'assets;assets' `
         --collect-all pystray `
         --hidden-import PIL._tkinter_finder `
+        --workpath $WorkPath `
+        --distpath $DistPath `
+        --specpath $Project `
         main.py
     if ($LASTEXITCODE -ne 0) { throw "PyInstaller failed with exit code $LASTEXITCODE" }
+    New-Item -ItemType Directory -Path (Join-Path $Project 'dist') -Force | Out-Null
+    Copy-Item -LiteralPath (Join-Path $DistPath 'TingtingHeartbeat.exe') -Destination (Join-Path $Project 'dist\TingtingHeartbeat.exe') -Force
     Write-Host "Built: $Project\dist\TingtingHeartbeat.exe"
 }
 finally {
     Pop-Location
+    if (Test-Path -LiteralPath $TempBuildRoot) {
+        Remove-Item -LiteralPath $TempBuildRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 import unittest
+from types import SimpleNamespace
 
 from PIL import Image
 
@@ -46,6 +47,36 @@ class CoreTests(unittest.TestCase):
         cursor_data = resource_path("assets/heart.cur").read_bytes()
         self.assertEqual(cursor_data[:6], struct.pack("<HHH", 0, 2, 1))
         self.assertGreater(TingtingPet._frame_interval("desk_sleep"), TingtingPet._frame_interval("idle") * 10)
+
+    def test_drag_direction_selects_matching_running_row(self) -> None:
+        self.assertEqual(TingtingPet._directional_running_row(1), "running-right")
+        self.assertEqual(TingtingPet._directional_running_row(-1), "running-left")
+
+    def test_drag_motion_updates_direction_and_restarts_animation(self) -> None:
+        class FakeRoot:
+            geometry_value = ""
+
+            def geometry(self, value: str) -> None:
+                self.geometry_value = value
+
+        pet = TingtingPet.__new__(TingtingPet)
+        pet.root = FakeRoot()
+        pet.drag_start = (100, 100, 10, 20)
+        pet.drag_last_x = 100
+        pet.dragged = False
+        pet.walk_direction = 1
+        pet.frame_cursor = 5
+        pet.last_frame_time = 99.0
+
+        pet._on_drag(SimpleNamespace(x_root=90, y_root=110))
+        self.assertTrue(pet.dragged)
+        self.assertEqual(pet.walk_direction, -1)
+        self.assertEqual((pet.frame_cursor, pet.last_frame_time), (0, 0.0))
+        self.assertEqual(pet.root.geometry_value, "+0+30")
+
+        pet._on_drag(SimpleNamespace(x_root=105, y_root=110))
+        self.assertEqual(pet.walk_direction, 1)
+        self.assertEqual(pet.root.geometry_value, "+15+30")
 
     def test_english_language_defaults_and_catalog_coverage(self) -> None:
         self.assertRegex(__version__, r"^\d+\.\d+\.\d+$")
@@ -132,6 +163,7 @@ class CoreTests(unittest.TestCase):
     def test_api_key_default_and_dpapi_roundtrip(self) -> None:
         self.assertEqual(default_state()["settings"]["api_key_protected"], "")
         self.assertFalse(default_state()["settings"]["web_search_enabled"])
+        self.assertTrue(default_state()["settings"]["auto_check_updates"])
         self.assertEqual(default_state()["chat_sessions"], [])
         secret = "test-key-never-package"
         self.assertEqual(unprotect_secret(protect_secret(secret)), secret)

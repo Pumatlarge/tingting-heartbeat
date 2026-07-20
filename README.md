@@ -62,6 +62,8 @@ The installer supports in-place upgrades. Save data is stored separately in:
 %APPDATA%\TingtingDesktopPet
 ```
 
+The app checks GitHub Releases at startup and can download a newer installer after confirmation. Automatic checks can be disabled, and updates can also be checked manually from Settings.
+
 Installing a newer version or using the standard uninstaller does not delete this folder.
 
 ## Controls
