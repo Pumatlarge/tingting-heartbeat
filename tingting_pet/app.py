@@ -6,6 +6,7 @@ import math
 import os
 import random
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -37,6 +38,7 @@ from .catalog import (
 )
 from .storage import default_state, load_state, protect_secret, save_state, set_start_with_windows, unprotect_secret
 from .i18n import ACHIEVEMENT_TEXT, ACTION_LABELS, PART_LABELS, PART_LINES, item_name as translated_item_name, text as translated_text
+from .updater import UpdateInfo, download_update, fetch_latest_release, is_newer_version
 
 
 TRANSPARENT = "#010203"
@@ -84,6 +86,7 @@ class TingtingPet:
         self.last_frame_time = 0.0
         self.walk_direction = 1
         self.drag_start = None
+        self.drag_last_x = None
         self.dragged = False
         self.touch_started = 0.0
         self.last_part_line: dict[str, str] = {}
@@ -109,6 +112,7 @@ class TingtingPet:
         self.chat_request_token = 0
         self.chat_status_after = None
         self.chat_session_ids: list[str] = []
+        self.update_busy = False
         self._normalize_chat_sessions()
         self.dialogs: dict[str, Toplevel] = {}
         self.dialog_opened_at: dict[str, float] = {}
@@ -122,6 +126,8 @@ class TingtingPet:
         self._tick_stats()
         self._show_startup_splash(welcome)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_pet)
+        if bool(self.settings.get("auto_check_updates", True)):
+            self.root.after(5200, self.check_for_updates)
 
     @property
     def language(self) -> str:
@@ -696,6 +702,7 @@ class TingtingPet:
             self.sleep_mode = False
             self.start_action("wave", self.bi("唔……你回来啦，我醒了。", "Mm... you're back. I'm awake now."))
         self.drag_start = (event.x_root, event.y_root, self.root.winfo_x(), self.root.winfo_y())
+        self.drag_last_x = event.x_root
         self.dragged = False
         self.touch_started = time.monotonic()
 
@@ -705,7 +712,13 @@ class TingtingPet:
         sx, sy, wx, wy = self.drag_start
         dx, dy = event.x_root - sx, event.y_root - sy
         if abs(dx) + abs(dy) > 5:
+            if not self.dragged:
+                self.frame_cursor = 0
+                self.last_frame_time = 0.0
             self.dragged = True
+        if self.drag_last_x is not None and event.x_root != self.drag_last_x:
+            self.walk_direction = 1 if event.x_root > self.drag_last_x else -1
+        self.drag_last_x = event.x_root
         new_x, new_y = wx + dx, wy + dy
         self.root.geometry(self._geometry_position(new_x, new_y))
 
@@ -723,6 +736,8 @@ class TingtingPet:
         elif event.y >= self.bubble_h:
             self.handle_part_click(event.x, event.y - self.bubble_h)
         self.drag_start = None
+        self.drag_last_x = None
+        self.last_frame_time = 0.0
 
     def _part_from_point(self, px: float, py: float) -> str | None:
         if self.last_rendered_alpha is not None:
@@ -822,7 +837,11 @@ class TingtingPet:
         if frame_due:
             self.last_frame_time = now
             row_name = str(spec["row"])
-            if spec.get("effect") == "walk":
+            render_effect = str(spec.get("effect", ""))
+            if self.drag_start is not None and self.dragged:
+                row_name = self._directional_running_row(self.walk_direction)
+                render_effect = ""
+            elif spec.get("effect") == "walk":
                 row_name = "running-right" if self.walk_direction > 0 else "running-left"
                 self._walk_step()
             row_frames = self.frames[row_name]
@@ -832,14 +851,14 @@ class TingtingPet:
                 frame = row_frames[self.frame_cursor % len(row_frames)]
             self.frame_cursor += 1
             self.last_render_source = frame
-            self.last_render_effect = str(spec.get("effect", ""))
+            self.last_render_effect = render_effect
         click_light_active = self.click_light_point is not None and now - self.click_light_started < 0.72
         click_light_due = click_light_active and now - self.last_click_light_render >= 1 / 30
         if (frame_due or click_light_due) and self.last_render_source is not None:
             if click_light_due:
                 self.last_click_light_render = now
             self._render_frame(self.last_render_source, self.last_render_effect, elapsed)
-        if now >= self.next_random_action and self.current_action == "idle" and not self.sleep_mode:
+        if now >= self.next_random_action and self.current_action == "idle" and not self.sleep_mode and self.drag_start is None:
             action = random.choice(["wave", "think", "sleepy", "shy", "dance", "review", "walk"])
             self.state["flags"]["random_actions"] = int(self.state["flags"].get("random_actions", 0)) + 1
             lines = ["I'm always here with you.", "Take a break when work gets tiring.", "Want to see a new action?", "Have you taken good care of yourself today?"] if self.is_english else ["我一直在这里陪着你。", "忙累了就休息一下吧。", "要不要看看我新学的动作？", "今天也有好好照顾自己吗？"]
@@ -850,6 +869,10 @@ class TingtingPet:
     @staticmethod
     def _frame_interval(action: str) -> float:
         return 1.65 if action == "desk_sleep" else 0.12
+
+    @staticmethod
+    def _directional_running_row(direction: int) -> str:
+        return "running-right" if direction > 0 else "running-left"
 
     @staticmethod
     def _sprite_scale_for_effect(effect: str) -> float:
@@ -1878,8 +1901,162 @@ class TingtingPet:
         self.save()
         self.check_achievements(defer_message=True)
 
+    @staticmethod
+    def _update_notes_excerpt(notes: str, max_chars: int = 520) -> str:
+        compact = "\n".join(line.strip() for line in str(notes).splitlines() if line.strip())
+        return compact if len(compact) <= max_chars else compact[: max_chars - 3].rstrip() + "..."
+
+    def _update_parent(self, parent=None):
+        if parent is not None:
+            try:
+                if parent.winfo_exists():
+                    return parent
+            except tk.TclError:
+                pass
+        return self.root
+
+    def check_for_updates(self, manual: bool = False, parent=None) -> None:
+        if self.update_busy:
+            if manual:
+                messagebox.showinfo(
+                    self.app_title,
+                    self.bi("正在检查或下载更新，请稍候。", "An update check or download is already in progress."),
+                    parent=self._update_parent(parent),
+                )
+            return
+        self.update_busy = True
+
+        def worker() -> None:
+            try:
+                info = fetch_latest_release()
+            except Exception as exc:
+                self.root.after(0, lambda error=str(exc): self._finish_update_check(None, error, manual, parent))
+                return
+            self.root.after(0, lambda: self._finish_update_check(info, None, manual, parent))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_update_check(self, info: UpdateInfo | None, error: str | None, manual: bool, parent=None) -> None:
+        self.update_busy = False
+        dialog_parent = self._update_parent(parent)
+        if error:
+            if manual:
+                messagebox.showwarning(
+                    self.app_title,
+                    self.bi(f"检查更新失败：{error}", f"Could not check for updates: {error}"),
+                    parent=dialog_parent,
+                )
+            return
+        if info is None:
+            return
+        try:
+            has_update = is_newer_version(info.version, __version__)
+        except ValueError as exc:
+            if manual:
+                messagebox.showwarning(self.app_title, str(exc), parent=dialog_parent)
+            return
+        if not has_update:
+            if manual:
+                messagebox.showinfo(
+                    self.app_title,
+                    self.bi(f"当前已是最新版本（v{__version__}）。", f"You're up to date (v{__version__})."),
+                    parent=dialog_parent,
+                )
+            return
+
+        notes = self._update_notes_excerpt(info.notes) or self.bi("此版本未提供更新说明。", "No release notes were provided.")
+        if not info.asset_url:
+            open_page = messagebox.askyesno(
+                self.app_title,
+                self.bi(
+                    f"发现新版本 v{info.version}，但该 Release 没有 Windows 安装包。\n\n是否打开下载页面？",
+                    f"Version v{info.version} is available, but the release has no Windows installer.\n\nOpen the download page?",
+                ),
+                parent=dialog_parent,
+            )
+            if open_page:
+                webbrowser.open(info.release_url)
+            return
+
+        size_text = f"{info.asset_size / 1024 / 1024:.1f} MB" if info.asset_size else self.bi("未知大小", "unknown size")
+        prompt = self.bi(
+            f"发现新版本 v{info.version}（当前 v{__version__}）。\n安装包：{info.asset_name}，{size_text}\n\n更新说明：\n{notes}\n\n是否立即下载并安装？",
+            f"Version v{info.version} is available (current v{__version__}).\nInstaller: {info.asset_name}, {size_text}\n\nRelease notes:\n{notes}\n\nDownload and install now?",
+        )
+        if messagebox.askyesno(self.app_title, prompt, parent=dialog_parent):
+            self._download_update(info, dialog_parent)
+
+    def _download_update(self, info: UpdateInfo, parent=None) -> None:
+        self.update_busy = True
+        window = Toplevel(self._update_parent(parent))
+        window.title(self.bi("正在更新心动婷婷", "Updating Tingting Heartbeat"))
+        window.geometry("460x150")
+        window.resizable(False, False)
+        window.attributes("-topmost", True)
+        window.protocol("WM_DELETE_WINDOW", lambda: None)
+        frame = ttk.Frame(window, padding=18)
+        frame.pack(fill=BOTH, expand=True)
+        ttk.Label(frame, text=self.bi(f"正在下载 v{info.version}…", f"Downloading v{info.version}…"), font=("Microsoft YaHei UI", 12, "bold")).pack(anchor="w")
+        status = ttk.Label(frame, text=self.bi("正在连接 GitHub…", "Connecting to GitHub…"), foreground="#806a72")
+        status.pack(anchor="w", pady=(8, 6))
+        progressbar = ttk.Progressbar(frame, mode="determinate", maximum=max(1, info.asset_size))
+        progressbar.pack(fill="x")
+
+        def report(downloaded: int, total: int) -> None:
+            self.root.after(0, lambda: self._render_update_progress(window, progressbar, status, downloaded, total))
+
+        def worker() -> None:
+            try:
+                installer = download_update(info, progress=report)
+            except Exception as exc:
+                self.root.after(0, lambda error=str(exc): self._finish_update_download(window, None, error))
+                return
+            self.root.after(0, lambda: self._finish_update_download(window, installer, None))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _render_update_progress(self, window, progressbar, status, downloaded: int, total: int) -> None:
+        try:
+            if not window.winfo_exists():
+                return
+            if total > 0:
+                progressbar.configure(maximum=total, value=min(downloaded, total), mode="determinate")
+                percent = min(100, int(downloaded * 100 / total))
+                status.configure(text=f"{downloaded / 1024 / 1024:.1f} / {total / 1024 / 1024:.1f} MB  ({percent}%)")
+            else:
+                progressbar.configure(mode="indeterminate")
+                progressbar.start(12)
+                status.configure(text=f"{downloaded / 1024 / 1024:.1f} MB")
+        except tk.TclError:
+            pass
+
+    def _finish_update_download(self, window, installer: Path | None, error: str | None) -> None:
+        self.update_busy = False
+        try:
+            window.destroy()
+        except tk.TclError:
+            pass
+        if error or installer is None:
+            messagebox.showerror(
+                self.app_title,
+                self.bi(f"更新包下载失败：{error or '未知错误'}", f"Could not download the update: {error or 'unknown error'}"),
+                parent=self.root,
+            )
+            return
+        try:
+            subprocess.Popen([str(installer)], close_fds=True)
+        except OSError as exc:
+            messagebox.showerror(
+                self.app_title,
+                self.bi(f"无法启动更新安装包：{exc}", f"Could not launch the update installer: {exc}"),
+                parent=self.root,
+            )
+            return
+        self.say(self.bi("更新包已下载，正在启动安装程序。", "The update is ready. Starting the installer."))
+        self.root.after(450, self.quit)
+
     def open_settings(self) -> None:
-        window = self._dialog("settings", self.t("婷婷设置"), "600x740")
+        window = self._dialog("settings", self.t("婷婷设置"), "620x740")
         if window is None:
             return
         frame = ttk.Frame(window, padding=18)
@@ -1910,6 +2087,7 @@ class TingtingPet:
         ttk.Combobox(frame, textvariable=language_var, values=("简体中文", "English"), state="readonly").grid(row=2, column=1, sticky="ew", pady=6)
         top_var = BooleanVar(value=bool(self.settings.get("always_on_top", True)))
         startup_var = BooleanVar(value=bool(self.settings.get("start_with_windows", False)))
+        auto_update_var = BooleanVar(value=bool(self.settings.get("auto_check_updates", True)))
         ttk.Checkbutton(frame, text=self.t("始终置顶"), variable=top_var).grid(row=3, column=1, sticky="w", pady=5)
         ttk.Checkbutton(frame, text=self.t("开机自动启动"), variable=startup_var).grid(row=4, column=1, sticky="w", pady=5)
         ttk.Separator(frame).grid(row=5, column=0, columnspan=2, sticky="ew", pady=14)
@@ -1942,6 +2120,7 @@ class TingtingPet:
             self.scale = self._effective_scale(self.user_scale, self.monitor_dpi)
             self.settings["always_on_top"] = bool(top_var.get())
             self.settings["start_with_windows"] = bool(startup_var.get())
+            self.settings["auto_check_updates"] = bool(auto_update_var.get())
             self.settings["api_base"] = api_base.get().strip() or "https://api.openai.com/v1"
             self.settings["api_model"] = api_model.get().strip() or "gpt-4.1-mini"
             self.settings["web_search_enabled"] = bool(web_search_var.get())
@@ -1966,15 +2145,30 @@ class TingtingPet:
             window.destroy()
             self.say(self.bi("设置已经保存好啦。", "Settings saved."))
 
-        actions = ttk.Frame(frame)
-        actions.grid(row=13, column=0, columnspan=2, sticky="ew", pady=(20, 0))
+        ttk.Separator(frame).grid(row=13, column=0, columnspan=2, sticky="ew", pady=(14, 12))
+        ttk.Label(frame, text=self.bi("软件更新", "Software updates"), font=("Microsoft YaHei UI", 15, "bold")).grid(row=14, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        ttk.Checkbutton(
+            frame,
+            text=self.bi("启动时自动检查更新", "Automatically check for updates at startup"),
+            variable=auto_update_var,
+        ).grid(row=15, column=0, columnspan=2, sticky="w", pady=4)
+        update_row = ttk.Frame(frame)
+        update_row.grid(row=16, column=0, columnspan=2, sticky="ew", pady=(2, 4))
         version_text = self.bi(f"版本 {__version__}", f"Version {__version__}")
-        ttk.Label(actions, text=version_text, foreground="#806a72").pack(side=LEFT, padx=(0, 14))
+        ttk.Label(update_row, text=version_text, foreground="#806a72").pack(side=LEFT)
+        ttk.Button(
+            update_row,
+            text=self.bi("检查更新", "Check for updates"),
+            command=lambda: self.check_for_updates(manual=True, parent=window),
+        ).pack(side=RIGHT)
+
+        actions = ttk.Frame(frame)
+        actions.grid(row=17, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         ttk.Button(actions, text=self.t("清除 API Key"), command=lambda: self._clear_api_key(window)).pack(side=LEFT)
         ttk.Button(actions, text=self.t("重置所有参数"), command=lambda: self.reset_all_data(window)).pack(side=LEFT, padx=8)
         ttk.Button(actions, text=self.t("保存设置"), style="Accent.TButton", command=save_settings).pack(side=RIGHT)
         safety = self.bi("分享安全：EXE 内不包含 API Key；发布包只包含程序和说明文件，不包含本机存档。", "Sharing safety: the EXE contains no API Key or local save data.")
-        ttk.Label(frame, text=safety, foreground="#7b5662", wraplength=540).grid(row=14, column=0, columnspan=2, sticky="w", pady=(14, 0))
+        ttk.Label(frame, text=safety, foreground="#7b5662", wraplength=560).grid(row=18, column=0, columnspan=2, sticky="w", pady=(12, 0))
 
     def _clear_api_key(self, parent) -> None:
         if messagebox.askyesno(self.app_title, self.bi("确认清除本机保存的 API Key？", "Clear the API Key saved on this computer?"), parent=parent):
