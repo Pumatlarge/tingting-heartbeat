@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import struct
 import unittest
+from datetime import date, timedelta
 from types import SimpleNamespace
 
 from PIL import Image
@@ -9,7 +10,7 @@ from PIL import Image
 from tingting_pet import __version__
 from tingting_pet.app import TingtingPet, resource_path
 from tingting_pet.catalog import ACHIEVEMENTS, FOOD_BY_NAME, GIFT_BY_NAME, LOGICAL_ACTIONS, RECOVERY_BY_NAME
-from tingting_pet.storage import default_state, protect_secret, unprotect_secret
+from tingting_pet.storage import _migrate_state, _record_launch, default_state, protect_secret, unprotect_secret
 from tingting_pet.i18n import ACHIEVEMENT_TEXT, ACTION_LABELS, ITEM_NAMES, text
 
 
@@ -67,6 +68,9 @@ class CoreTests(unittest.TestCase):
         pet.walk_direction = 1
         pet.frame_cursor = 5
         pet.last_frame_time = 99.0
+        pet.window_w = 200
+        pet.window_h = 300
+        pet._monitor_info_at = lambda *_args: {"work": (0, 0, 1920, 1040)}
 
         pet._on_drag(SimpleNamespace(x_root=90, y_root=110))
         self.assertTrue(pet.dragged)
@@ -86,6 +90,12 @@ class CoreTests(unittest.TestCase):
         self.assertGreaterEqual(len(ACHIEVEMENTS), 50)
         self.assertGreaterEqual(len(ACTION_LABELS), len(LOGICAL_ACTIONS))
         self.assertIn("蒜蓉空心菜", ITEM_NAMES)
+
+    def test_packaging_versions_match_internal_version(self) -> None:
+        installer = resource_path("installer.iss").read_text(encoding="utf-8")
+        build_script = resource_path("build-installer.ps1").read_text(encoding="utf-8")
+        self.assertIn(f'#define MyAppVersion "{__version__}"', installer)
+        self.assertIn(f"[string]$Version = '{__version__}'", build_script)
 
     def test_bubble_text_wraps_to_measured_width(self) -> None:
         class FakeFont:
@@ -112,7 +122,9 @@ class CoreTests(unittest.TestCase):
         self.assertLessEqual(x + 320, work_area[2] - 8)
         self.assertGreaterEqual(y, work_area[1] + 8)
         self.assertLessEqual(y + 570, work_area[3] - 8)
-        self.assertEqual(TingtingPet._geometry_position(-1800, 24), "-1800+24")
+        self.assertEqual(TingtingPet._geometry_position(-1800, 24), "+-1800+24")
+        self.assertEqual(TingtingPet._clamp_pet_to_work_area(-900, -900, 200, 300, (0, 0, 1920, 1040)), (-100, -150))
+        self.assertEqual(TingtingPet._clamp_pet_to_work_area(3000, 2000, 200, 300, (0, 0, 1920, 1040)), (1820, 890))
         self.assertEqual(TingtingPet._quick_panel_dimensions(320, 730, work_area), (320, 730))
         short_work_area = (0, 0, 1280, 650)
         self.assertEqual(TingtingPet._quick_panel_dimensions(410, 900, short_work_area), (410, 634))
@@ -164,9 +176,80 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(default_state()["settings"]["api_key_protected"], "")
         self.assertFalse(default_state()["settings"]["web_search_enabled"])
         self.assertTrue(default_state()["settings"]["auto_check_updates"])
+        self.assertEqual(default_state()["settings"]["opacity"], 1.0)
         self.assertEqual(default_state()["chat_sessions"], [])
         secret = "test-key-never-package"
         self.assertEqual(unprotect_secret(protect_secret(secret)), secret)
+
+    def test_launch_day_achievements_use_cumulative_days(self) -> None:
+        day_metrics = {ach_id: metric for ach_id, _title, _desc, metric, _target in ACHIEVEMENTS if ach_id.startswith("streak_")}
+        self.assertTrue(day_metrics)
+        self.assertEqual(set(day_metrics.values()), {"total_launch_days"})
+
+        state = default_state()
+        state["last_open_date"] = (date.today() - timedelta(days=3)).isoformat()
+        _record_launch(state)
+        self.assertEqual(state["total_launch_days"], 1)
+        self.assertEqual(state["streak_days"], 1)
+        _record_launch(state)
+        self.assertEqual(state["total_launch_days"], 1)
+
+        legacy = default_state()
+        legacy.pop("total_launch_days")
+        legacy["streak_days"] = 12
+        _migrate_state(legacy)
+        self.assertEqual(legacy["total_launch_days"], 12)
+
+    def test_achievement_progress_and_opacity_helpers(self) -> None:
+        pet = self.make_pet()
+        self.assertIn("2 天 / 7 天", pet._achievement_progress_text("total_launch_days", 2, 7))
+        self.assertIn("50%", pet._achievement_progress_text("clicks", 5, 10))
+        self.assertEqual(TingtingPet._clamp_opacity(0.1), 0.4)
+        self.assertEqual(TingtingPet._clamp_opacity(0.75), 0.75)
+        self.assertEqual(TingtingPet._clamp_opacity(2), 1.0)
+
+    def test_thousand_hour_achievement_unlocks(self) -> None:
+        achievement = next(item for item in ACHIEVEMENTS if item[0] == "companion_1000h")
+        self.assertEqual(achievement[3:], ("companion_seconds", 1000 * 3600))
+        pet = self.make_pet()
+        pet.state["companion_seconds"] = 1000 * 3600
+        TingtingPet.check_achievements(pet, defer_message=True)
+        self.assertIn("companion_1000h", pet.state["achievements"])
+
+    def test_care_alert_thresholds_actions_and_recovery_reset(self) -> None:
+        pet = self.make_pet()
+        alerts = []
+        pet.start_action = lambda action, message: alerts.append((action, message))
+        pet.last_care_alert_at = 0.0
+        self.assertEqual(TingtingPet._care_alert_level(50), 0)
+        self.assertEqual(TingtingPet._care_alert_level(49.9), 1)
+        self.assertEqual(TingtingPet._care_alert_level(10), 1)
+        self.assertEqual(TingtingPet._care_alert_level(9.9), 2)
+
+        pet.state["hunger"] = 49
+        self.assertTrue(pet._check_care_alerts(100))
+        self.assertEqual(alerts[-1][0], "hungry")
+        pet.state["hunger"] = 9
+        self.assertTrue(pet._check_care_alerts(110))
+        self.assertEqual(alerts[-1][0], "starving")
+        pet.state["hunger"] = 80
+        self.assertFalse(pet._check_care_alerts(120))
+        self.assertEqual(pet.state["care_alert_levels"]["hunger"], 0)
+
+        cases = {"mood": ("lonely", "heartbroken"), "energy": ("tired", "exhausted")}
+        now = 130
+        for metric, actions in cases.items():
+            pet.state[metric] = 49
+            self.assertTrue(pet._check_care_alerts(now))
+            self.assertEqual(alerts[-1][0], actions[0])
+            now += 10
+            pet.state[metric] = 9
+            self.assertTrue(pet._check_care_alerts(now))
+            self.assertEqual(alerts[-1][0], actions[1])
+            now += 10
+
+    def test_default_care_alert_levels_start_clear(self) -> None:
+        self.assertEqual(default_state()["care_alert_levels"], {"hunger": 0, "mood": 0, "energy": 0})
 
     def test_mood_decay_accelerates_with_neglect(self) -> None:
         fresh = TingtingPet._mood_decay_per_minute(0)

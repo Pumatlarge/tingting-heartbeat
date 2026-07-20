@@ -45,6 +45,7 @@ def default_state() -> dict:
         "hunger": 76,
         "mood": 82,
         "energy": 78,
+        "care_alert_levels": {"hunger": 0, "mood": 0, "energy": 0},
         "coins": 200,
         "coins_earned": 200,
         "coins_spent": 0,
@@ -59,12 +60,14 @@ def default_state() -> dict:
         "next_drop_at": time.time() + 1800,
         "last_open_date": "",
         "streak_days": 0,
+        "total_launch_days": 0,
         "position": None,
         "chat_sessions": [],
         "active_chat_id": None,
         "settings": {
             "language": "zh-CN",
             "scale": 0.82,
+            "opacity": 1.0,
             "always_on_top": True,
             "start_with_windows": False,
             "api_base": "https://api.openai.com/v1",
@@ -111,6 +114,7 @@ def _migrate_state(state: dict) -> None:
         if old in parts:
             parts[new] = int(parts.get(new, 0)) + int(parts.pop(old, 0))
     state["coins"] = max(0, int(state.get("coins", 0)))
+    state["total_launch_days"] = max(0, int(state.get("total_launch_days", 0)), int(state.get("streak_days", 0)))
     for key in ["inventory_food", "inventory_gift", "inventory_recovery"]:
         state[key] = {name: max(0, int(count)) for name, count in state.get(key, {}).items()}
 
@@ -123,6 +127,7 @@ def _record_launch(state: dict) -> None:
     except ValueError:
         previous = None
     if previous != today:
+        state["total_launch_days"] = max(0, int(state.get("total_launch_days", 0))) + 1
         if previous == today - timedelta(days=1):
             state["streak_days"] = max(1, int(state.get("streak_days", 0)) + 1)
         else:

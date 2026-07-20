@@ -99,6 +99,8 @@ ACTION_LABELS = {
     "dance": "Dance", "sleepy": "Sleepy", "angry": "Pretend angry", "walk": "Desktop walk", "face_smile": "Smile",
     "face_blush": "Blush", "face_surprise": "Wide-eyed", "guard": "Protect herself", "arm_wave": "Wave arm",
     "skirt_twirl": "Show skirt", "gift_receive": "Receive gift", "recover": "Recover", "desk_sleep": "Sleep at the desk",
+    "hungry": "Hungry", "starving": "Starving", "lonely": "Feeling lonely", "heartbroken": "Very upset",
+    "tired": "Tired", "exhausted": "Exhausted",
 }
 
 
@@ -128,8 +130,8 @@ ACHIEVEMENT_TEXT = {
     "morning_glory": ("A Touch of Green", "Try garlic water spinach."), "shrimp": ("Fresh and Sweet", "Try poached shrimp."),
     "beef": ("Full of Energy", "Try pan-seared beef."), "balanced_trio": ("Land and Sea", "Try water spinach, shrimp and beef."),
     "chat_1": ("Let's Talk", "Complete the first AI chat."), "chat_20": ("Talk About Anything", "Complete 20 AI chats."),
-    "chat_100": ("A Hundred Heartfelt Words", "Complete 100 AI chats."), "streak_3": ("Three-Day Hello", "Launch on 3 consecutive days."),
-    "streak_7": ("A Week Together", "Launch on 7 consecutive days."), "streak_30": ("A Month Together", "Launch on 30 consecutive days."),
+    "chat_100": ("A Hundred Heartfelt Words", "Complete 100 AI chats."), "streak_3": ("Three-Day Hello", "Launch on 3 days in total."),
+    "streak_7": ("A Week Together", "Launch on 7 days in total."), "streak_30": ("A Month Together", "Launch on 30 days in total."),
     "drag_10k": ("Desktop Traveler", "Move Tingting 10,000 pixels."), "actions_10": ("Action Collector", "See 10 different actions."),
     "night_owl": ("Night Watch", "Interact between midnight and 4 a.m."), "early_bird": ("Good Morning", "Interact between 5 and 8 a.m."),
     "gift_1": ("First Gift", "Give Tingting her first gift."), "gift_20": ("Gift Collector", "Give 20 gifts."),
@@ -141,8 +143,8 @@ ACHIEVEMENT_TEXT = {
     "feed_500": ("Five-Star Chef", "Feed Tingting 500 times."),
     "gift_100": ("A Hundred Keepsakes", "Give Tingting 100 gifts."),
     "chat_500": ("Closest Confidant", "Complete 500 AI chats."),
-    "streak_100": ("A Hundred-Day Promise", "Launch on 100 consecutive days."),
-    "streak_365": ("Four Seasons Together", "Launch on 365 consecutive days."),
+    "streak_100": ("A Hundred-Day Promise", "Launch on 100 days in total."),
+    "streak_365": ("Four Seasons Together", "Launch on 365 days in total."),
     "drag_100k": ("Desktop Odyssey", "Move Tingting 100,000 pixels."),
     "coins_10000": ("Prosperous Treasury", "Earn 10,000 coins."),
     "coins_100000": ("Heartbeat Vault", "Earn 100,000 coins."),

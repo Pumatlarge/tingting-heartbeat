@@ -69,6 +69,7 @@ Installing a newer version or using the standard uninstaller does not delete thi
 ## Controls
 
 - Drag with the left mouse button: move Tingting.
+- At a display edge, up to half of Tingting can be tucked off-screen without jumping to the opposite side.
 - Click different body areas: trigger area-specific reactions.
 - Double-click: open chat.
 - Right-click: open the feature center.

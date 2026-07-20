@@ -12,7 +12,9 @@ def run() -> None:
     with tempfile.TemporaryDirectory(prefix="tingting-smoke-") as temp:
         os.environ["APPDATA"] = temp
         os.environ["TINGTING_SKIP_SPLASH"] = "1"
+        from tingting_pet import __version__
         from tingting_pet.app import TingtingPet
+        from tkinter import ttk
 
         app = TingtingPet()
         assert not hasattr(app, "heart_cursor_handle"), "custom cursor runtime must remain disabled"
@@ -145,6 +147,33 @@ def run() -> None:
         app.root.after(6400, app.open_achievements)
         app.root.after(6800, app.open_help)
         app.root.after(7200, app.open_settings)
+
+        def verify_enhancement_controls() -> None:
+            def descendants(widget):
+                result = []
+                for child in widget.winfo_children():
+                    result.append(child)
+                    result.extend(descendants(child))
+                return result
+
+            settings = app.dialogs.get("settings")
+            achievements = app.dialogs.get("achievements")
+            assert settings is not None and settings.winfo_exists(), "settings window is missing"
+            assert achievements is not None and achievements.winfo_exists(), "achievements window is missing"
+            visible_text = [str(item.cget("text")) for item in descendants(settings) if "text" in item.keys()]
+            assert any(f"版本 {__version__}" in value for value in visible_text), "settings version does not match internal version"
+            for key in ("statistics", "achievements", "help", "settings"):
+                window = app.dialogs.get(key)
+                assert window is not None and not bool(window.attributes("-topmost")), f"{key} window stayed topmost"
+            assert len([item for item in descendants(settings) if isinstance(item, ttk.Scale)]) >= 2, "opacity slider is missing"
+            assert len([item for item in descendants(achievements) if isinstance(item, ttk.Progressbar)]) >= 1, "achievement progress bars are missing"
+            original_alpha = float(app.root.attributes("-alpha"))
+            app.root.attributes("-alpha", 0.65)
+            app.root.update_idletasks()
+            assert abs(float(app.root.attributes("-alpha")) - 0.65) < 0.02, "window opacity did not apply"
+            app.root.attributes("-alpha", original_alpha)
+
+        app.root.after(7700, verify_enhancement_controls)
         app.root.after(8200, app.quit)
         app.run()
         print("GUI_SMOKE_OK")

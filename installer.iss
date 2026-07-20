@@ -1,5 +1,5 @@
 #ifndef MyAppVersion
-  #define MyAppVersion "1.6.1"
+#define MyAppVersion "1.6.2"
 #endif
 
 #define MyAppName "心动婷婷"

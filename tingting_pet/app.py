@@ -77,6 +77,7 @@ class TingtingPet:
         self.settings = self.state["settings"]
         self.pending_offline_message = self._apply_offline_progress()
         self.user_scale = float(self.settings.get("scale", 0.82))
+        self.opacity = self._clamp_opacity(self.settings.get("opacity", 1.0))
         self.monitor_dpi = 96
         self.scale = self.user_scale
         self.frames = self._load_frames()
@@ -102,6 +103,9 @@ class TingtingPet:
         self.sleep_mode = False
         self.next_random_action = self.last_activity + random.uniform(20, 45)
         self.last_stats_tick = time.monotonic()
+        self.last_care_alert_at = 0.0
+        # A new session should remind the user again if offline decay left a status low.
+        self.state["care_alert_levels"] = {"hunger": 0, "mood": 0, "energy": 0}
         self.photo = None
         self.sprite_item = None
         self.bubble_after = None
@@ -301,6 +305,7 @@ class TingtingPet:
         style.configure("Muted.TLabel", foreground="#76666b")
         self.root.overrideredirect(True)
         self.root.attributes("-topmost", bool(self.settings.get("always_on_top", True)))
+        self.root.attributes("-alpha", self.opacity)
         try:
             self.root.wm_attributes("-toolwindow", True)
         except tk.TclError:
@@ -327,7 +332,16 @@ class TingtingPet:
 
     @staticmethod
     def _geometry_position(x: int, y: int) -> str:
-        return f"{int(x):+d}{int(y):+d}"
+        # A leading '-' means "offset from the right/bottom" to Tk. Always
+        # prefix coordinates with '+' so negative multi-monitor positions stay absolute.
+        return f"+{int(x)}+{int(y)}"
+
+    @staticmethod
+    def _clamp_opacity(value: float) -> float:
+        try:
+            return round(max(0.4, min(float(value), 1.0)), 2)
+        except (TypeError, ValueError):
+            return 1.0
 
     @staticmethod
     def _effective_scale(user_scale: float, dpi: int) -> float:
@@ -346,6 +360,24 @@ class TingtingPet:
         min_x, min_y = left + padding, top + padding
         max_x = max(min_x, right - width - padding)
         max_y = max(min_y, bottom - height - padding)
+        return max(min_x, min(int(x), max_x)), max(min_y, min(int(y), max_y))
+
+    @staticmethod
+    def _clamp_pet_to_work_area(
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        work_area: tuple[int, int, int, int],
+        visible_fraction: float = 0.5,
+    ) -> tuple[int, int]:
+        """Keep the requested fraction of the pet visible while allowing edge hiding."""
+        left, top, right, bottom = work_area
+        fraction = max(0.1, min(float(visible_fraction), 1.0))
+        visible_w = max(1, int(math.ceil(width * fraction)))
+        visible_h = max(1, int(math.ceil(height * fraction)))
+        min_x, max_x = left - width + visible_w, right - visible_w
+        min_y, max_y = top - height + visible_h, bottom - visible_h
         return max(min_x, min(int(x), max_x)), max(min_y, min(int(y), max_y))
 
     @staticmethod
@@ -524,7 +556,7 @@ class TingtingPet:
             else:
                 left, top, right, bottom = info["work"]
                 x, y = right - width - 70, bottom - self.window_h - 90
-        x, y = self._clamp_to_work_area(x, y, width, self.window_h, info["work"], padding=0)
+        x, y = self._clamp_pet_to_work_area(x, y, width, self.window_h, info["work"])
         self.root.geometry(f"{width}x{self.window_h}{self._geometry_position(x, y)}")
         self.canvas.configure(width=width, height=self.window_h)
 
@@ -720,6 +752,8 @@ class TingtingPet:
             self.walk_direction = 1 if event.x_root > self.drag_last_x else -1
         self.drag_last_x = event.x_root
         new_x, new_y = wx + dx, wy + dy
+        monitor = self._monitor_info_at(event.x_root, event.y_root)
+        new_x, new_y = self._clamp_pet_to_work_area(new_x, new_y, self.window_w, self.window_h, monitor["work"])
         self.root.geometry(self._geometry_position(new_x, new_y))
 
     def _on_release(self, event) -> None:
@@ -1186,10 +1220,7 @@ class TingtingPet:
             self.state["mood"] = max(0, float(self.state["mood"]) - 0.12 * minutes)
         if time.time() >= float(self.state.get("next_drop_at", 0)):
             self.grant_system_drop()
-        if self.state["hunger"] < 20 and random.random() < 0.04:
-            self.start_action("sad", self.bi("我有点饿，也没什么力气了……背包里的营养包可以帮我恢复。", "I'm hungry and low on energy... a nutrition pack can help me recover."))
-        elif self.state["mood"] < 25 and random.random() < 0.03:
-            self.start_action("sad", self.bi("好久没有收到心意了，陪我说说话或送一份小礼物好吗？", "I haven't received a gift in a while. Could we talk or share a little present?"))
+        self._check_care_alerts(now)
         self._refresh_store()
         self.save()
         self.check_achievements()
@@ -1203,6 +1234,46 @@ class TingtingPet:
         if since_gift_hours >= 24:
             rate += 0.08
         return rate
+
+    @staticmethod
+    def _care_alert_level(value: float) -> int:
+        if float(value) < 10:
+            return 2
+        if float(value) < 50:
+            return 1
+        return 0
+
+    def _care_alert_spec(self, metric: str, level: int) -> tuple[str, str]:
+        specs = {
+            ("hunger", 1): ("hungry", self.bi("我的饱腹已经低于 50% 啦，能陪我吃点东西吗？", "My fullness is below 50%. Could we get something to eat?")),
+            ("hunger", 2): ("starving", self.bi("饱腹低于 10%！我已经饿得没力气了，请尽快喂我吃东西。", "Fullness is below 10%! I'm too hungry to move—please feed me soon.")),
+            ("mood", 1): ("lonely", self.bi("我的心情低于 50% 了……陪我说说话，或送份小礼物好吗？", "My mood is below 50%... Could we chat or share a little gift?")),
+            ("mood", 2): ("heartbroken", self.bi("心情低于 10%！我现在真的很难过，可以多陪陪我吗？", "Mood is below 10%! I'm really upset right now. Could you stay with me?")),
+            ("energy", 1): ("tired", self.bi("我的元气低于 50% 了，有点困……该休息或补充元气啦。", "My energy is below 50%. I'm getting sleepy—time to rest or recover.")),
+            ("energy", 2): ("exhausted", self.bi("元气低于 10%！我已经精疲力尽了，请尽快让我休息或使用恢复品。", "Energy is below 10%! I'm exhausted—please let me rest or use a recovery item.")),
+        }
+        return specs[(metric, level)]
+
+    def _check_care_alerts(self, now: float | None = None) -> bool:
+        now = time.monotonic() if now is None else float(now)
+        previous = self.state.setdefault("care_alert_levels", {"hunger": 0, "mood": 0, "energy": 0})
+        increases: list[tuple[int, int, str]] = []
+        priority = {"hunger": 0, "mood": 1, "energy": 2}
+        for metric in ("hunger", "mood", "energy"):
+            level = self._care_alert_level(float(self.state.get(metric, 100)))
+            old_level = int(previous.get(metric, 0))
+            if level > old_level:
+                increases.append((level, -priority[metric], metric))
+            elif level < old_level:
+                previous[metric] = level
+        if not increases or now - float(getattr(self, "last_care_alert_at", 0.0)) < 8.0:
+            return False
+        level, _priority, metric = max(increases)
+        previous[metric] = level
+        self.last_care_alert_at = now
+        action, message = self._care_alert_spec(metric, level)
+        self.start_action(action, message)
+        return True
 
     def grant_system_drop(self, silent: bool = False) -> None:
         if self.state.get("hunger", 50) < 30 or self.state.get("energy", 50) < 30:
@@ -2062,13 +2133,19 @@ class TingtingPet:
         frame = ttk.Frame(window, padding=18)
         frame.pack(fill=BOTH, expand=True)
         ttk.Label(frame, text=self.t("显示与启动"), font=("Microsoft YaHei UI", 15, "bold")).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 10))
-        ttk.Label(frame, text=self.t("人物大小")).grid(row=1, column=0, sticky="w", pady=6)
+        display_labels = ttk.Frame(frame)
+        display_labels.grid(row=1, column=0, sticky="nw", pady=6)
+        ttk.Label(display_labels, text=self.t("人物大小")).grid(row=0, column=0, sticky="w", pady=(1, 12))
+        ttk.Label(display_labels, text=self.bi("透明度", "Opacity")).grid(row=1, column=0, sticky="w", pady=(7, 1))
         scale_var = DoubleVar(value=self.user_scale)
+        opacity_var = DoubleVar(value=self.opacity)
         scale_row = ttk.Frame(frame)
         scale_row.grid(row=1, column=1, sticky="ew", pady=6)
         scale_row.columnconfigure(0, weight=1)
         scale_label = ttk.Label(scale_row, text=f"{int(self.user_scale * 100)}%", width=6)
         scale_label.grid(row=0, column=1, padx=(8, 0))
+        opacity_label = ttk.Label(scale_row, text=f"{int(self.opacity * 100)}%", width=6)
+        opacity_label.grid(row=1, column=1, padx=(8, 0), pady=(8, 0))
 
         def preview_scale(value: str) -> None:
             self.user_scale = round(float(value), 2)
@@ -2081,7 +2158,14 @@ class TingtingPet:
             frame_image = self.frames[row][self.frame_cursor % len(self.frames[row])]
             self._render_frame(frame_image, str(spec.get("effect", "")), time.monotonic() - self.action_started)
 
+        def preview_opacity(value: str) -> None:
+            self.opacity = self._clamp_opacity(value)
+            self.settings["opacity"] = self.opacity
+            opacity_label.configure(text=f"{int(self.opacity * 100)}%")
+            self.root.attributes("-alpha", self.opacity)
+
         ttk.Scale(scale_row, from_=0.5, to=1.6, variable=scale_var, orient="horizontal", command=preview_scale).grid(row=0, column=0, sticky="ew")
+        ttk.Scale(scale_row, from_=0.4, to=1.0, variable=opacity_var, orient="horizontal", command=preview_opacity).grid(row=1, column=0, sticky="ew", pady=(8, 0))
         language_var = StringVar(value="English" if self.is_english else "简体中文")
         ttk.Label(frame, text=self.t("界面语言")).grid(row=2, column=0, sticky="w", pady=6)
         ttk.Combobox(frame, textvariable=language_var, values=("简体中文", "English"), state="readonly").grid(row=2, column=1, sticky="ew", pady=6)
@@ -2118,6 +2202,8 @@ class TingtingPet:
             self.user_scale = round(float(scale_var.get()), 2)
             self.settings["scale"] = self.user_scale
             self.scale = self._effective_scale(self.user_scale, self.monitor_dpi)
+            self.opacity = self._clamp_opacity(opacity_var.get())
+            self.settings["opacity"] = self.opacity
             self.settings["always_on_top"] = bool(top_var.get())
             self.settings["start_with_windows"] = bool(startup_var.get())
             self.settings["auto_check_updates"] = bool(auto_update_var.get())
@@ -2132,6 +2218,7 @@ class TingtingPet:
             except OSError as exc:
                 messagebox.showwarning(self.app_title, self.bi(f"开机启动设置失败：{exc}", f"Could not update startup setting: {exc}"), parent=window)
             self.root.attributes("-topmost", bool(top_var.get()))
+            self.root.attributes("-alpha", self.opacity)
             self._resize_window()
             self.save()
             self.root.title(self.app_title)
@@ -2187,12 +2274,14 @@ class TingtingPet:
         self.state = default_state()
         self.settings = self.state["settings"]
         self.user_scale = float(self.settings["scale"])
+        self.opacity = self._clamp_opacity(self.settings.get("opacity", 1.0))
         self.scale = self._effective_scale(self.user_scale, self.monitor_dpi)
         self.chat_request_token += 1
         self.chat_busy = False
         self.chat_request_session_id = None
         self._normalize_chat_sessions()
         self._resize_window()
+        self.root.attributes("-alpha", self.opacity)
         self.save()
         if parent and parent.winfo_exists():
             parent.destroy()
@@ -2307,7 +2396,7 @@ class TingtingPet:
         scrollbar.configure(command=canvas.yview)
         scrollbar.pack(side=RIGHT, fill="y")
         self._register_scroll_canvas(window, canvas)
-        for ach_id, title, desc, _metric, target in ACHIEVEMENTS:
+        for ach_id, title, desc, metric, target in ACHIEVEMENTS:
             done = ach_id in unlocked
             if self.is_english:
                 title, desc = ACHIEVEMENT_TEXT.get(ach_id, (title, desc))
@@ -2319,6 +2408,11 @@ class TingtingPet:
             tk.Label(text, text=title, font=("Microsoft YaHei UI", 11, "bold"), fg="#8b2f49" if done else "#6f6267", bg=card["bg"]).pack(anchor="w")
             suffix = f"  ·  {unlocked[ach_id]}" if done else ""
             tk.Label(text, text=desc + suffix, font=("Microsoft YaHei UI", 9), fg="#63545a" if done else "#9b8d92", bg=card["bg"], justify="left", wraplength=570).pack(anchor="w", pady=(2, 0))
+            current = self._metric_value(metric)
+            percent = min(100, int(current * 100 / max(1, target)))
+            progress_text = self._achievement_progress_text(metric, current, int(target), done)
+            tk.Label(text, text=progress_text, font=("Microsoft YaHei UI", 9, "bold"), fg="#8b2f49" if done else "#806f75", bg=card["bg"]).pack(anchor="w", pady=(5, 2))
+            ttk.Progressbar(text, maximum=100, value=percent, mode="determinate").pack(fill="x", pady=(0, 2))
             reward = self._achievement_reward(ach_id, target)
             if not done:
                 reward_text, reward_fg = self.bi(f"🪙 达成后可领取 {reward} 金币", f"🪙 Earn {reward} coins when completed"), "#a09297"
@@ -2337,6 +2431,32 @@ class TingtingPet:
         index = next((i for i, item in enumerate(ACHIEVEMENTS) if item[0] == ach_id), 0)
         difficulty = int(math.log10(max(1, float(target))) * 40)
         return int(round((50 + min(950, index * 8 + difficulty)) / 10) * 10)
+
+    def _achievement_progress_text(self, metric: str, current: int, target: int, done: bool = False) -> str:
+        if metric == "companion_seconds":
+            current_text = self._duration_progress_value(current)
+            target_text = self._duration_progress_value(target)
+        elif metric == "total_launch_days":
+            current_text = self.bi(f"{current} 天", f"{current} days")
+            target_text = self.bi(f"{target} 天", f"{target} days")
+        elif metric == "drag_distance":
+            current_text = self.bi(f"{current:,} 像素", f"{current:,} px")
+            target_text = self.bi(f"{target:,} 像素", f"{target:,} px")
+        else:
+            current_text, target_text = f"{current:,}", f"{target:,}"
+        status = self.bi("已完成", "Completed") if done else self.bi("当前进度", "Progress")
+        percent = min(100, int(current * 100 / max(1, target)))
+        return f"{status}：{current_text} / {target_text}  ({percent}%)"
+
+    def _duration_progress_value(self, seconds: int) -> str:
+        seconds = max(0, int(seconds))
+        hours, remainder = divmod(seconds, 3600)
+        minutes, remaining_seconds = divmod(remainder, 60)
+        if hours:
+            return self.bi(f"{hours} 小时 {minutes} 分", f"{hours}h {minutes}m")
+        if minutes:
+            return self.bi(f"{minutes} 分 {remaining_seconds} 秒", f"{minutes}m {remaining_seconds}s")
+        return self.bi(f"{remaining_seconds} 秒", f"{remaining_seconds}s")
 
     def _claim_achievement_ids(self, achievement_ids: list[str]) -> int:
         unlocked = self.state.setdefault("achievements", {})
@@ -2469,7 +2589,7 @@ class TingtingPet:
         window.title(title)
         window.geometry(geometry)
         window.minsize(460, 380)
-        window.attributes("-topmost", True)
+        window.attributes("-topmost", False)
         window.protocol("WM_DELETE_WINDOW", lambda: (self.dialogs.pop(key, None), window.destroy()))
         return window
 
