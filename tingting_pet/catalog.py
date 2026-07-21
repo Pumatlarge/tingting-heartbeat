@@ -28,15 +28,23 @@ FOOD_BY_NAME = {item["name"]: item for item in FOODS}
 for _food, _price in zip(FOODS, [18, 36, 48, 22, 42, 45, 34, 28, 26, 46, 52, 20, 16, 32, 28, 18, 16, 20, 30, 14]):
     _food["price"] = _price
 
+
+OUTFITS = [
+    {"id": "burgundy", "name": "经典酒红长裙", "name_en": "Classic Burgundy Dress", "price": 0, "asset": "assets/spritesheet.webp", "pose_dir": "assets/outfits/burgundy-hd"},
+    {"id": "blue_floral", "name": "浅蓝印花长裙", "name_en": "Pale Blue Floral Dress", "price": 800, "asset": "assets/outfits/blue-floral.webp", "pose_dir": "assets/outfits/blue-floral-hd"},
+]
+
+OUTFIT_BY_ID = {item["id"]: item for item in OUTFITS}
+
 PART_REACTIONS = {
     "hair": {
         "label": "摸头发",
-        "actions": ["pet", "shy", "sleepy"],
+        "actions": ["pet", "shy", "peace", "sleepy"],
         "lines": ["轻一点呀，发型要被你揉乱啦。", "你是在帮我整理头发吗？谢谢～", "头顶被摸得暖暖的，有点想打瞌睡。", "今天的头发很顺吧？", "再摸一下也可以，不过只能一下哦。"],
     },
     "face": {
         "label": "碰脸",
-        "actions": ["face_smile", "face_blush", "face_surprise"],
+        "actions": ["face_smile", "face_blush", "peace", "face_surprise"],
         "lines": ["脸颊不是按钮……但我收到你的问候啦。", "突然碰脸，我会害羞的。", "咦？被你戳到了！", "今天的笑容看起来怎么样？", "眼镜没有歪吧？帮我看看。"],
     },
     "chest": {
@@ -46,42 +54,51 @@ PART_REACTIONS = {
     },
     "arms": {
         "label": "碰手臂",
-        "actions": ["arm_wave", "surprised", "work"],
+        "actions": ["high_five", "hand_reach", "heart_hands", "clap", "stretch", "work"],
         "lines": ["要牵手还是击掌？", "手臂今天也很有力气。", "抓住我的手，一起加油吧。", "袖口……啊，我没有袖子呢。", "别担心，我会陪你把事情做完。"],
     },
     "skirt": {
         "label": "碰裙子",
-        "actions": ["skirt_twirl", "shy", "dance"],
+        "actions": ["curtsey", "skirt_show", "shy", "dance"],
         "lines": ["这条酒红色长裙是我很喜欢的一件。", "裙摆转起来很好看吧？", "小心不要踩到裙角哦。", "金色腰链会轻轻响呢。", "想看我穿着这条裙子跳舞吗？"],
     },
 }
 
 LOGICAL_ACTIONS = {
     "idle": {"label": "安静陪伴", "row": "idle", "duration": 4.0},
-    "wave": {"label": "挥手问候", "row": "waving", "duration": 2.4, "effect": "wave"},
+    "wave": {"label": "挥手问候", "row": "waving", "pose": "wave", "duration": 2.4, "effect": "wave"},
     "jump": {"label": "开心跳跃", "row": "jumping", "duration": 2.2, "effect": "jump"},
     "work": {"label": "认真工作", "row": "running", "duration": 4.0, "effect": "work"},
     "review": {"label": "查看成果", "row": "review", "duration": 3.2, "effect": "review"},
     "wait": {"label": "等待回应", "row": "waiting", "duration": 3.2},
     "sad": {"label": "小小失落", "row": "failed", "duration": 3.0},
     "pet": {"label": "享受摸头", "row": "idle", "duration": 2.6, "effect": "squash"},
-    "shy": {"label": "害羞", "row": "waving", "duration": 2.8, "effect": "blush"},
+    "shy": {"label": "害羞", "row": "waving", "pose": "heart-hands", "duration": 2.8, "effect": "blush"},
     "surprised": {"label": "惊讶", "row": "jumping", "duration": 1.8, "effect": "pulse"},
     "tickle": {"label": "怕痒", "row": "jumping", "duration": 2.2, "effect": "shake"},
-    "twirl": {"label": "旋转裙摆", "row": "waving", "duration": 3.2, "effect": "twirl"},
+    "twirl": {"label": "展示裙摆", "row": "review", "pose": "skirt-show", "duration": 3.2},
     "eat": {"label": "享用美食", "row": "review", "duration": 3.0, "effect": "bob"},
     "think": {"label": "认真思考", "row": "waiting", "duration": 3.5, "effect": "think"},
     "celebrate": {"label": "庆祝", "row": "jumping", "duration": 3.0, "effect": "sparkle"},
-    "dance": {"label": "跳舞", "row": "jumping", "duration": 4.5, "effect": "dance"},
+    "dance": {"label": "跳舞", "row": "jumping", "pose": "skirt-show", "duration": 4.5, "effect": "dance"},
     "sleepy": {"label": "犯困", "row": "idle", "duration": 5.0, "effect": "sleepy"},
     "angry": {"label": "假装生气", "row": "failed", "duration": 2.8, "effect": "shake"},
     "walk": {"label": "桌面散步", "row": "running-right", "duration": 6.0, "effect": "walk"},
     "face_smile": {"label": "微笑", "row": "idle", "duration": 2.4, "effect": "smile"},
-    "face_blush": {"label": "脸红", "row": "waving", "duration": 2.6, "effect": "blush"},
+    "face_blush": {"label": "脸红", "row": "waving", "pose": "heart-hands", "duration": 2.6, "effect": "blush"},
     "face_surprise": {"label": "睁大眼睛", "row": "jumping", "duration": 1.8, "effect": "face_surprise"},
     "guard": {"label": "护住自己", "row": "failed", "duration": 2.4, "effect": "guard"},
-    "arm_wave": {"label": "摆动手臂", "row": "waving", "duration": 2.6, "effect": "arm_wave"},
-    "skirt_twirl": {"label": "展示裙摆", "row": "review", "duration": 3.0, "effect": "skirt_twirl"},
+    "arm_wave": {"label": "摆动手臂", "row": "waving", "pose": "wave", "duration": 2.6, "effect": "arm_wave"},
+    "hand_reach": {"label": "伸出手掌", "row": "waving", "pose": "high-five", "duration": 2.8, "effect": "hand_reach"},
+    "high_five": {"label": "和你击掌", "row": "waving", "pose": "high-five", "duration": 2.6, "effect": "hand_reach"},
+    "heart_hands": {"label": "双手比心", "row": "waiting", "pose": "heart-hands", "duration": 3.0, "effect": "hearts"},
+    "curtsey": {"label": "优雅屈膝礼", "row": "review", "pose": "curtsey", "duration": 3.0},
+    "clap": {"label": "开心鼓掌", "row": "jumping", "pose": "clap", "duration": 2.8, "effect": "bob"},
+    "peace": {"label": "剪刀手", "row": "waving", "pose": "peace", "duration": 2.8},
+    "skirt_show": {"label": "展示裙摆", "row": "review", "pose": "skirt-show", "duration": 3.2},
+    "stretch": {"label": "伸懒腰", "row": "idle", "pose": "stretch", "duration": 3.2, "effect": "bob"},
+    "skirt_twirl": {"label": "展示裙摆", "row": "review", "pose": "skirt-show", "duration": 3.0},
+    "skirt_spin": {"label": "优雅屈膝礼", "row": "review", "pose": "curtsey", "duration": 3.0},
     "gift_receive": {"label": "收下礼物", "row": "jumping", "duration": 3.2, "effect": "hearts"},
     "recover": {"label": "恢复元气", "row": "jumping", "duration": 2.8, "effect": "recover"},
     "hungry": {"label": "有点饿了", "row": "waiting", "duration": 4.2, "effect": "bob"},

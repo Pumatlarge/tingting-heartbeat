@@ -53,6 +53,8 @@ def default_state() -> dict:
         "inventory_food": {},
         "inventory_gift": {},
         "inventory_recovery": {"元气营养包": 1},
+        "purchase_counts": {"food": {}, "gift": {}, "recovery": {}},
+        "owned_outfits": ["burgundy"],
         "system_drops": 0,
         "last_feed_at": time.time(),
         "last_gift_at": time.time(),
@@ -69,6 +71,8 @@ def default_state() -> dict:
             "scale": 0.82,
             "opacity": 1.0,
             "always_on_top": True,
+            "do_not_disturb": False,
+            "outfit": "burgundy",
             "start_with_windows": False,
             "api_base": "https://api.openai.com/v1",
             "api_model": "gpt-4.1-mini",
@@ -114,9 +118,19 @@ def _migrate_state(state: dict) -> None:
         if old in parts:
             parts[new] = int(parts.get(new, 0)) + int(parts.pop(old, 0))
     state["coins"] = max(0, int(state.get("coins", 0)))
+    owned_outfits = {str(item) for item in state.get("owned_outfits", [])}
+    owned_outfits.add("burgundy")
+    state["owned_outfits"] = sorted(owned_outfits)
+    if state.get("settings", {}).get("outfit") not in owned_outfits:
+        state.setdefault("settings", {})["outfit"] = "burgundy"
     state["total_launch_days"] = max(0, int(state.get("total_launch_days", 0)), int(state.get("streak_days", 0)))
     for key in ["inventory_food", "inventory_gift", "inventory_recovery"]:
         state[key] = {name: max(0, int(count)) for name, count in state.get(key, {}).items()}
+    purchase_counts = state.setdefault("purchase_counts", {})
+    for kind in ("food", "gift", "recovery"):
+        purchase_counts[kind] = {
+            name: max(0, int(count)) for name, count in purchase_counts.get(kind, {}).items()
+        }
 
 
 def _record_launch(state: dict) -> None:

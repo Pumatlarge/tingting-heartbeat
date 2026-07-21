@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -70,7 +71,7 @@ def run() -> None:
             panel.update()
             panel_status = app.panel_status.cget("text")
             assert "🪙" not in panel_status and str(app.state["coins"]) not in panel_status, "quick-panel status still shows coins"
-            assert all(str(int(app.state[key])) in panel_status for key in ("hunger", "mood", "energy")), "quick-panel status is missing a care value"
+            assert len(re.findall(r"\d+%", panel_status)) == 3, "quick-panel status is missing a care value"
             status_bottom = app.panel_status.winfo_y() + app.panel_status.winfo_height()
             assert status_bottom <= app.panel_status.master.winfo_height(), "quick-panel status is clipped"
             footer = app.quick_panel_footer
@@ -101,6 +102,14 @@ def run() -> None:
             canvas.event_generate("<MouseWheel>", x=20, y=20, rootx=rootx, rooty=rooty, delta=-120)
             window.update_idletasks()
             assert canvas.yview() != before, "store mouse wheel did not scroll"
+            notebook = next(item for item in window.winfo_children() if isinstance(item, ttk.Notebook))
+            notebook.select(notebook.tabs()[2])
+            window.update()
+            recovery_canvas = window._wheel_canvases[2]
+            recovery_window = recovery_canvas.nametowidget(recovery_canvas.itemcget(recovery_canvas.find_all()[0], "window"))
+            first_card_y = min(card.winfo_y() for card in recovery_window.winfo_children())
+            assert first_card_y <= 16, "recovery cards still leave a large blank area above them"
+            assert all("历史购买" in variable.get() for (kind, _name), (variable, _key) in app.store_stock_vars.items() if kind == "recovery"), "recovery purchase history is missing"
 
         app.root.after(900, verify_store_wheel)
         app.root.after(1100, lambda: app.purchase("food", "蒜蓉空心菜"))
@@ -158,20 +167,33 @@ def run() -> None:
 
             settings = app.dialogs.get("settings")
             achievements = app.dialogs.get("achievements")
+            store = app.dialogs.get("store")
+            action_window = app.dialogs.get("actions")
             assert settings is not None and settings.winfo_exists(), "settings window is missing"
             assert achievements is not None and achievements.winfo_exists(), "achievements window is missing"
+            assert store is not None and store.winfo_exists(), "store window is missing"
+            assert action_window is not None and action_window.winfo_exists(), "actions window is missing"
             visible_text = [str(item.cget("text")) for item in descendants(settings) if "text" in item.keys()]
+            store_text = [str(item.cget("text")) for item in descendants(store) if "text" in item.keys()]
             assert any(f"版本 {__version__}" in value for value in visible_text), "settings version does not match internal version"
+            assert not any("浅蓝印花长裙" in value for value in visible_text), "blue floral outfit should not remain in Settings"
+            assert any("浅蓝印花长裙" in value for value in store_text), "blue floral outfit is missing from the Store"
             for key in ("statistics", "achievements", "help", "settings"):
                 window = app.dialogs.get(key)
                 assert window is not None and not bool(window.attributes("-topmost")), f"{key} window stayed topmost"
             assert len([item for item in descendants(settings) if isinstance(item, ttk.Scale)]) >= 2, "opacity slider is missing"
+            settings_checks = [item for item in descendants(settings) if isinstance(item, ttk.Checkbutton)]
+            assert settings_checks and all(item.cget("style") == "Checkmark.TCheckbutton" for item in settings_checks), "a settings checkbox still uses the x indicator"
+            action_buttons = [item for item in descendants(action_window) if isinstance(item, ttk.Button)]
+            assert len(action_buttons) == 16 and all(item.cget("style") == "Action.TButton" for item in action_buttons), "action buttons are not using the aligned icon layout"
             assert len([item for item in descendants(achievements) if isinstance(item, ttk.Progressbar)]) >= 1, "achievement progress bars are missing"
             original_alpha = float(app.root.attributes("-alpha"))
             app.root.attributes("-alpha", 0.65)
             app.root.update_idletasks()
             assert abs(float(app.root.attributes("-alpha")) - 0.65) < 0.02, "window opacity did not apply"
             app.root.attributes("-alpha", original_alpha)
+            app.toggle_do_not_disturb()
+            assert app.settings["do_not_disturb"], "one-click Do Not Disturb did not enable"
 
         app.root.after(7700, verify_enhancement_controls)
         app.root.after(8200, app.quit)

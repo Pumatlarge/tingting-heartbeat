@@ -20,8 +20,11 @@ Download: https://pan.baidu.com/s/1EKhXNDwNXucy-r-BCxfDWw KEY: 6688
 
 - Transparent, always-on-top desktop character that can be dragged around the screen.
 - Different reactions for touching the hair, face, chest, arms, and dress, with varied dialogue and facial expressions.
-- 28 character actions, including waving, dancing, working, thinking, sleeping, and celebrating.
+- More than 30 character actions, including reaching out when her arm is clicked and spinning when her dress is clicked.
 - Natural idle sleep after five minutes without interaction.
+- One-click Do Not Disturb in the right-click feature center pauses proactive bubbles, low-status nudges, and random actions.
+- The Shop includes an Outfits tab where players can preview, permanently buy, and switch dresses with coins; food, gifts, and recovery items also track lifetime purchase counts.
+- The pale blue floral dress includes complete high-resolution animation rows, and both dresses support eight separately drawn high-resolution interaction poses.
 - Feeding system with 20 dishes, including water spinach, poached shrimp, and beef.
 - Gifts, recovery items, coins, offline rewards, inventory, mood, hunger, and energy.
 - 50 local achievements, including long-term companionship, streak, and advanced interaction goals, with claimable coin rewards.

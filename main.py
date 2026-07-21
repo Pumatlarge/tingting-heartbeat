@@ -7,7 +7,7 @@ import traceback
 
 from PIL import Image
 
-from tingting_pet.catalog import ACHIEVEMENTS, FOODS, GIFTS, LOGICAL_ACTIONS, RECOVERY_ITEMS, ROW_INDEX
+from tingting_pet.catalog import ACHIEVEMENTS, FOODS, GIFTS, LOGICAL_ACTIONS, OUTFIT_BY_ID, RECOVERY_ITEMS, ROW_INDEX
 from tingting_pet.storage import app_dir, default_state
 
 
@@ -32,6 +32,11 @@ def self_test() -> int:
             "heartbeat_icon": resource_path("assets/tingting-heartbeat-icon.png").is_file(),
             "heart_cursor": resource_path("assets/heart.cur").is_file(),
             "action_icons": all(resource_path(f"assets/action-icons/{name}.png").is_file() for name in action_names),
+            "blue_floral_outfit": resource_path(str(OUTFIT_BY_ID["blue_floral"]["asset"])).is_file(),
+            "blue_floral_hd_poses": len(list(resource_path(str(OUTFIT_BY_ID["blue_floral"]["pose_dir"])).glob("*.png"))) == 65,
+            "burgundy_hd_poses": len(list(resource_path(str(OUTFIT_BY_ID["burgundy"]["pose_dir"])).glob("*.png"))) == 8,
+            "no_flip_effect": all(spec.get("effect") != "spin" for spec in LOGICAL_ACTIONS.values()),
+            "do_not_disturb_default": not default_state()["settings"]["do_not_disturb"],
             "desk_sleep": LOGICAL_ACTIONS.get("desk_sleep", {}).get("effect") == "desk_sleep",
             "hit_zones": {
                 "hair": TingtingPet._classify_visible_point(0.2, 0.16),
@@ -45,7 +50,7 @@ def self_test() -> int:
         menu_actions = ["wave", "jump", "dance", "think", "work", "review", "sleepy", "walk", "shy", "celebrate"]
         result["action_effects_unique"] = len({LOGICAL_ACTIONS[name].get("effect", name) for name in menu_actions}) == len(menu_actions)
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0 if result["ok"] and result["required_foods"] and result["api_key_default_empty"] and result["language_default"] and result["heartbeat_icon"] and result["heart_cursor"] and result["action_icons"] and result["desk_sleep"] and result["hit_zones_ok"] and result["action_effects_unique"] else 1
+    return 0 if result["ok"] and result["required_foods"] and result["api_key_default_empty"] and result["language_default"] and result["heartbeat_icon"] and result["heart_cursor"] and result["action_icons"] and result["blue_floral_outfit"] and result["blue_floral_hd_poses"] and result["burgundy_hd_poses"] and result["no_flip_effect"] and result["do_not_disturb_default"] and result["desk_sleep"] and result["hit_zones_ok"] and result["action_effects_unique"] else 1
 
 
 def acquire_single_instance():

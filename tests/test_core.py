@@ -3,13 +3,14 @@ from __future__ import annotations
 import struct
 import unittest
 from datetime import date, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
-from PIL import Image
+from PIL import Image, ImageChops, ImageFilter, ImageStat
 
 from tingting_pet import __version__
-from tingting_pet.app import TingtingPet, resource_path
-from tingting_pet.catalog import ACHIEVEMENTS, FOOD_BY_NAME, GIFT_BY_NAME, LOGICAL_ACTIONS, RECOVERY_BY_NAME
+from tingting_pet.app import BLUE_FLORAL_SKIRT_LINES, TingtingPet, resource_path
+from tingting_pet.catalog import ACHIEVEMENTS, FOOD_BY_NAME, GIFT_BY_NAME, LOGICAL_ACTIONS, OUTFIT_BY_ID, PART_REACTIONS, RECOVERY_BY_NAME, ROW_INDEX
 from tingting_pet.storage import _migrate_state, _record_launch, default_state, protect_secret, unprotect_secret
 from tingting_pet.i18n import ACHIEVEMENT_TEXT, ACTION_LABELS, ITEM_NAMES, text
 
@@ -37,6 +38,9 @@ class CoreTests(unittest.TestCase):
         names = ["wave", "jump", "dance", "think", "work", "review", "sleepy", "walk", "shy", "celebrate"]
         effects = [LOGICAL_ACTIONS[name].get("effect", name) for name in names]
         self.assertEqual(len(effects), len(set(effects)))
+        self.assertEqual(LOGICAL_ACTIONS["dance"]["pose"], "skirt-show")
+        app_source = Path(TingtingPet._render_frame.__code__.co_filename).read_text(encoding="utf-8")
+        self.assertNotIn(".rotate(", app_source)
 
     def test_desktop_sleep_action_and_ui_assets(self) -> None:
         self.assertEqual(LOGICAL_ACTIONS["desk_sleep"]["effect"], "desk_sleep")
@@ -47,7 +51,38 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(all(resource_path(f"assets/action-icons/{name}.png").is_file() for name in icon_names))
         cursor_data = resource_path("assets/heart.cur").read_bytes()
         self.assertEqual(cursor_data[:6], struct.pack("<HHH", 0, 2, 1))
-        self.assertGreater(TingtingPet._frame_interval("desk_sleep"), TingtingPet._frame_interval("idle") * 10)
+        self.assertGreater(TingtingPet._frame_interval("desk_sleep"), TingtingPet._frame_interval("idle") * 3)
+        self.assertLessEqual(TingtingPet._sprite_scale_for_effect("desk_sleep"), 0.75)
+
+    def test_action_icons_are_normalized_to_one_canvas(self) -> None:
+        for name in ["wave", "jump", "dance", "think", "work", "review", "sleepy", "walk", "shy", "celebrate"]:
+            with Image.open(resource_path(f"assets/action-icons/{name}.png")) as source:
+                normalized = TingtingPet._normalize_action_icon(source)
+            self.assertEqual(normalized.size, (40, 40))
+            bbox = normalized.getchannel("A").getbbox()
+            self.assertIsNotNone(bbox)
+            self.assertLessEqual(max(bbox[2] - bbox[0], bbox[3] - bbox[1]), 38)
+            self.assertLessEqual(abs((bbox[0] + bbox[2]) - 40), 1)
+            self.assertLessEqual(abs((bbox[1] + bbox[3]) - 40), 1)
+
+    def test_click_actions_use_drawn_poses_without_flip_effect(self) -> None:
+        self.assertEqual(PART_REACTIONS["arms"]["actions"][0], "high_five")
+        self.assertEqual(PART_REACTIONS["skirt"]["actions"][0], "curtsey")
+        self.assertEqual(LOGICAL_ACTIONS["high_five"]["pose"], "high-five")
+        self.assertEqual(LOGICAL_ACTIONS["curtsey"]["pose"], "curtsey")
+        self.assertNotIn("spin", {str(spec.get("effect", "")) for spec in LOGICAL_ACTIONS.values()})
+        self.assertTrue(all("酒红" not in line and "腰链" not in line for line in BLUE_FLORAL_SKIRT_LINES["zh-CN"]))
+        self.assertTrue(all("burgundy" not in line.lower() and "golden chain" not in line.lower() for line in BLUE_FLORAL_SKIRT_LINES["en"]))
+
+    def test_chat_character_description_follows_current_outfit(self) -> None:
+        pet = self.make_pet()
+        pet.settings["outfit"] = "blue_floral"
+        pet.settings["language"] = "zh-CN"
+        self.assertIn("浅蓝印花长裙", pet._chat_system_prompt())
+        self.assertNotIn("酒红长裙", pet._chat_system_prompt())
+        pet.settings["language"] = "en"
+        self.assertIn("Pale Blue Floral Dress", pet._chat_system_prompt())
+        self.assertNotIn("burgundy dress", pet._chat_system_prompt().lower())
 
     def test_drag_direction_selects_matching_running_row(self) -> None:
         self.assertEqual(TingtingPet._directional_running_row(1), "running-right")
@@ -164,11 +199,15 @@ class CoreTests(unittest.TestCase):
         pet.purchase("gift", gift)
         pet.give_gift(gift)
         self.assertEqual(pet.state["gifts_given"], 1)
-        pet.state["inventory_recovery"][recovery] = 1
+        pet.state["inventory_recovery"][recovery] = 0
+        pet.purchase("recovery", recovery)
         pet.state["energy"] = 10
         pet.use_recovery(recovery)
         self.assertGreater(pet.state["energy"], 10)
-        expected_spend = FOOD_BY_NAME[food]["price"] + GIFT_BY_NAME[gift]["price"]
+        self.assertEqual(pet.state["purchase_counts"]["food"][food], 1)
+        self.assertEqual(pet.state["purchase_counts"]["gift"][gift], 1)
+        self.assertEqual(pet.state["purchase_counts"]["recovery"][recovery], 1)
+        expected_spend = FOOD_BY_NAME[food]["price"] + GIFT_BY_NAME[gift]["price"] + RECOVERY_BY_NAME[recovery]["price"]
         self.assertEqual(pet.state["coins_spent"], expected_spend)
         self.assertIn(recovery, RECOVERY_BY_NAME)
 
@@ -178,6 +217,10 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(default_state()["settings"]["auto_check_updates"])
         self.assertEqual(default_state()["settings"]["opacity"], 1.0)
         self.assertEqual(default_state()["chat_sessions"], [])
+        self.assertFalse(default_state()["settings"]["do_not_disturb"])
+        self.assertEqual(default_state()["settings"]["outfit"], "burgundy")
+        self.assertEqual(default_state()["owned_outfits"], ["burgundy"])
+        self.assertEqual(default_state()["purchase_counts"], {"food": {}, "gift": {}, "recovery": {}})
         secret = "test-key-never-package"
         self.assertEqual(unprotect_secret(protect_secret(secret)), secret)
 
@@ -251,6 +294,76 @@ class CoreTests(unittest.TestCase):
     def test_default_care_alert_levels_start_clear(self) -> None:
         self.assertEqual(default_state()["care_alert_levels"], {"hunger": 0, "mood": 0, "energy": 0})
 
+    def test_do_not_disturb_suppresses_bubbles_and_care_alerts(self) -> None:
+        pet = self.make_pet()
+        pet.settings["do_not_disturb"] = True
+        pet.state["hunger"] = 1
+        pet.say("这句话不应该访问画布")
+        self.assertFalse(pet._check_care_alerts(100))
+
+    def test_outfit_purchase_is_permanent_and_equips_atlas(self) -> None:
+        pet = self.make_pet()
+        loaded = []
+        pet._load_frames = lambda outfit_id=None: loaded.append(outfit_id) or {}
+        pet.state["coins"] = 1000
+        self.assertEqual(OUTFIT_BY_ID["blue_floral"]["price"], 800)
+        self.assertTrue(pet.purchase_or_equip_outfit("blue_floral"))
+        self.assertEqual(pet.state["coins"], 200)
+        self.assertIn("blue_floral", pet.state["owned_outfits"])
+        self.assertEqual(pet.settings["outfit"], "blue_floral")
+        self.assertEqual(loaded[-1], "blue_floral")
+        self.assertTrue(pet.purchase_or_equip_outfit("burgundy"))
+        self.assertTrue(pet.purchase_or_equip_outfit("blue_floral"))
+        self.assertEqual(pet.state["coins"], 200)
+
+    def test_blue_floral_outfit_atlas_is_valid_size_and_transparent(self) -> None:
+        path = resource_path(str(OUTFIT_BY_ID["blue_floral"]["asset"]))
+        with Image.open(path) as atlas:
+            self.assertEqual(atlas.size, (1536, 1872))
+            self.assertEqual(atlas.mode, "RGBA")
+            self.assertEqual(atlas.getpixel((0, 0))[3], 0)
+        pet = TingtingPet.__new__(TingtingPet)
+        pet.settings = {"outfit": "blue_floral"}
+        frames = pet._load_frames("blue_floral")
+        for state, (_row, count) in ROW_INDEX.items():
+            self.assertEqual(len(frames[state]), count)
+            self.assertTrue(all(frame.size == (384, 416) for frame in frames[state]))
+        self.assertEqual(frames["idle"][0].size, (384, 416))
+        for pose in ("wave", "high-five", "heart-hands", "curtsey", "clap", "peace", "skirt-show", "stretch"):
+            self.assertIn(f"pose:{pose}", frames)
+            self.assertEqual(frames[f"pose:{pose}"][0].size, (384, 416))
+
+    def test_burgundy_outfit_has_every_special_action_pose(self) -> None:
+        pet = TingtingPet.__new__(TingtingPet)
+        pet.settings = {"outfit": "burgundy"}
+        frames = pet._load_frames("burgundy")
+        for pose in ("wave", "high-five", "heart-hands", "curtsey", "clap", "peace", "skirt-show", "stretch"):
+            self.assertIn(f"pose:{pose}", frames)
+            self.assertEqual(frames[f"pose:{pose}"][0].size, (384, 416))
+
+    def test_high_resolution_pose_assets_are_transparent_and_stable(self) -> None:
+        pose_root = resource_path(str(OUTFIT_BY_ID["blue_floral"]["pose_dir"]))
+        stable_boxes = {state: [] for state in ("idle", "running-right", "running-left", "waving", "failed", "waiting", "running", "review")}
+        for path in sorted(pose_root.glob("*.png")):
+            with Image.open(path) as frame:
+                self.assertEqual(frame.size, (384, 416))
+                self.assertEqual(frame.mode, "RGBA")
+                self.assertEqual(frame.getpixel((0, 0)), (0, 0, 0, 0))
+                self.assertIsNotNone(frame.getchannel("A").getbbox())
+                for state in stable_boxes:
+                    suffix = path.stem.removeprefix(f"{state}-")
+                    if suffix != path.stem and suffix.isdigit():
+                        stable_boxes[state].append(frame.getchannel("A").getbbox())
+        self.assertEqual(len(list(pose_root.glob("*.png"))), 65)
+        for state, boxes in stable_boxes.items():
+            self.assertEqual(len(boxes), ROW_INDEX[state][1], state)
+            centers = [round((box[0] + box[2]) / 2) for box in boxes]
+            bottoms = [box[3] for box in boxes]
+            self.assertLessEqual(max(centers) - min(centers), 1, state)
+            self.assertEqual(len(set(bottoms)), 1, state)
+        jumping_boxes = [Image.open(pose_root / f"jumping-{index}.png").getchannel("A").getbbox() for index in range(5)]
+        self.assertEqual([box[3] for box in jumping_boxes], [412, 380, 352, 380, 412])
+
     def test_mood_decay_accelerates_with_neglect(self) -> None:
         fresh = TingtingPet._mood_decay_per_minute(0)
         six_hours = TingtingPet._mood_decay_per_minute(6)
@@ -283,6 +396,14 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(resized.getpixel((0, 0)), (0, 0, 0, 0))
         self.assertEqual(resized.getchannel("A").getextrema(), (0, 255))
 
+    def test_sprite_detail_enhancement_preserves_alpha_and_increases_edge_contrast(self) -> None:
+        image = Image.open(resource_path("assets/outfits/blue-floral.webp")).convert("RGBA").crop((0, 0, 192, 208))
+        enhanced = TingtingPet._enhance_sprite_detail(image, percent=145)
+        self.assertEqual(enhanced.getchannel("A").tobytes(), image.getchannel("A").tobytes())
+        before = ImageChops.difference(image.convert("RGB"), image.convert("RGB").filter(ImageFilter.GaussianBlur(0.8)))
+        after = ImageChops.difference(enhanced.convert("RGB"), enhanced.convert("RGB").filter(ImageFilter.GaussianBlur(0.8)))
+        self.assertGreater(sum(ImageStat.Stat(after).mean), sum(ImageStat.Stat(before).mean))
+
     def test_blush_marks_stay_on_detected_face(self) -> None:
         atlas = Image.open(resource_path("assets/spritesheet.webp")).convert("RGBA")
         frame = atlas.crop((192, 3 * 208, 384, 4 * 208))
@@ -311,15 +432,13 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertTrue(all(abs(x - center) > (right - left) * 0.12 for x, _y in changed))
 
-    def test_guard_effect_adds_no_translucent_block(self) -> None:
+    def test_guard_effect_does_not_draw_a_shield_over_the_character(self) -> None:
         atlas = Image.open(resource_path("assets/spritesheet.webp")).convert("RGBA")
         frame = atlas.crop((4 * 192, 5 * 208, 5 * 192, 6 * 208))
         pet = TingtingPet.__new__(TingtingPet)
         pet.scale = 1.0
         decorated = pet._decorate_effect(frame, "guard", 1.0)
-        changed_alpha = [decorated.getpixel((x, y))[3] for y in range(frame.height) for x in range(frame.width) if frame.getpixel((x, y)) != decorated.getpixel((x, y))]
-        self.assertTrue(changed_alpha)
-        self.assertTrue(all(alpha == 255 for alpha in changed_alpha))
+        self.assertIsNone(ImageChops.difference(frame, decorated).getbbox())
 
 
 if __name__ == "__main__":
